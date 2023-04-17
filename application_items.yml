@@ -1,0 +1,57 @@
+---
+1: !ruby/hash-with-ivars:Item
+  ivars:
+    :@isbn: '0374528934'
+    :@web: http://www.amazon.com/First-Great-Triumph-Americans-Country/dp/B003ZP8N0G/ref=sr_1_5/191-6899640-3048542?ie=UTF8&s=books&qid=1305199458&sr=1-5Amazon
+      (US)
+    :@title: First Great Triumph How Five Americans Made Their Country a World Power
+    :@authors: Warren Zimmerman
+    :@icon_image: default.png
+    :@description: ''
+    :@genre: spanish american war
+    :@tags: 40. victorian/gilded age 1837-1901
+    :@pages: ''
+    :@cost: '24.26'
+    :@value: ''
+    :@location: 1.4.3
+    :@publisher: Farrar,Strauss  Giroux,2004
+    :@acquired: '2011-05-12'
+    :@disposition: ''
+    :@comments: ''
+    :@publication_date: '2004'
+    :@format: Paperback
+    :@language: English
+    :@added: '2020-07-19 09:39:13 -0400'
+    :@image_dir: application_images
+    :@item_image: ''
+    :@id: '1'
+    :@edition: ''
+  elements: {}
+2: !ruby/hash-with-ivars:Item
+  ivars:
+    :@isbn: '9780395710838'
+    :@web: http://www.amazon.com/Crusade-Untold-Story-Persian-Gulf/dp/0395710839/ref=sr_1_2/189-0504504-7250148?ie=UTF8&s=books&qid=1305199877&sr=1-2Amazon
+      (US)
+    :@title: 'Crusade: The Untold Story of the Persian Gulf War'
+    :@authors: Rick Atkinson
+    :@icon_image: Crusade__The_Untold_Story_of_the_Persian_Gulf_War__9780395710838__0.jpg
+    :@description: ''
+    :@genre: modern military history, iraq war
+    :@tags: 48. information age 1975-present
+    :@pages: '608'
+    :@cost: '12.21'
+    :@value: ''
+    :@location: 1.5.3
+    :@publisher: Mariner Books
+    :@acquired: ''
+    :@disposition: ''
+    :@comments: ''
+    :@publication_date: '19101994'
+    :@format: Paperback
+    :@language: English
+    :@added: '2020-07-21 03:44:33 -0400'
+    :@image_dir: application_images
+    :@item_image: ''
+    :@id: '3'
+    :@edition: ''
+  elements: {}
