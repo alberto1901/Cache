@@ -119,7 +119,7 @@ attr_accessor :report_name,
   :language_order,          :language_filter,            :language_exact,           :language_sort,
   :edition_order,           :edition_filter,             :edition_exact,            :edition_sort,
 
-:query_name,              :report_format,              :exclude_html_format,      :exclude_summary
+  :query_name,          :report_format,        :exclude_html_format,    :exclude_summary
 
 
   def initialize(
@@ -149,8 +149,8 @@ attr_accessor :report_name,
     format_order=nil,            format_filter=nil,              format_exact=nil,             format_sort=nil,
     language_order=nil,          language_filter=nil,            language_exact=nil,           language_sort=nil,
     edition_order=nil,           edition_filter=nil,             edition_exact=nil,            edition_sort=nil,
-    query_name=nil,              report_format=nil,              exclude_html_format = nil,    exclude_summary = nil)
 
+    query_name = nil,          report_format = nil,        exclude_html_format = nil,    exclude_summary = nil)
 
     #autofill the instance variables with method added to Object class, below
     set_instance_variables(binding, *local_variables)
@@ -238,6 +238,9 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
 
     exclude_summary = request.query['exclude_summary']
     request.query.delete('exclude_summary')
+
+    bulk_update = request.query['bulk_update']
+    request.query.delete('bulk_update')
 
     select_by = Array.new() #to pass to report for summary
 
@@ -341,12 +344,12 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
     ##### At this point subset_ids now contains ids of all records that fit the search criteria all in the correct sort order
 
     ##### Time to format the report
-    format_results(subset_ids, query, sort_fields, select_by, report_format, request.query['query_name'].to_s, exclude_summary, exclude_html_format)
+    format_results(subset_ids, query, sort_fields, select_by, report_format, request.query['query_name'].to_s, exclude_summary, exclude_html_format, bulk_update)
 
 end # query_results
 
 
-def format_results(subset_ids, query, sort_fields=nil, select_by=nil, report_format=nil, report_name=nil, exclude_summary=nil, exclude_html_format=nil)
+def format_results(subset_ids, query, sort_fields=nil, select_by=nil, report_format=nil, report_name=nil, exclude_summary=nil, exclude_html_format=nil, bulk_update=nil)
 
   #method variables
   report_html  = String.new
@@ -425,6 +428,12 @@ def format_results(subset_ids, query, sort_fields=nil, select_by=nil, report_for
   total_replacement_cost    = 0
   total_replacement_value   = 0
 
+  #if bulk update is being used we need an extra header column heading
+  bulk_update_header = ''
+  if bulk_update != nil && bulk_update != '' then
+    bulk_update_header = "<th>update</th>"
+  end
+
 #loop through each report row and format it. Add summary rows as necessary
 report.each do |row|
 
@@ -435,7 +444,7 @@ report.each do |row|
 
     if exclude_summary == nil then
       report_row_formatted << field_summary(summary_count, summary_field_name, current_summary_value, summary_replacement_cost, summary_replacement_value, summary_genre, report_format)
-      report_row_formatted << %Q~<tr><th>#{header_row.join('</th><th>')}</th></tr>\n~
+      report_row_formatted << %Q~<tr>#{bulk_update_header}<th>#{header_row.join('</th><th>')}</th></tr>\n~
     end
 
     #update the report totals
@@ -487,11 +496,15 @@ report.each do |row|
     end
   end
 
-
+  #if bulk_update we need to add a select box
+  bulk_select = ''
+  if bulk_update != nil then
+    bulk_select = %Q~<td><input type='checkbox' id='#{item_key.to_i}' name='#{item_key.to_i}' value='#{item_key.to_i}' checked='checked'></td>~
+  end
 
 
   #add the next item to the report
-  report_row_formatted << %Q~<tr><td>#{row.join('</td><td>')}</td></tr>\n~
+  report_row_formatted << %Q~<tr>#{bulk_select}<td>#{row.join('</td><td>')}</td></tr>\n~
   #store the current summary column value to see if it changes next item and therefore needing a summary row
   current_summary_value = row[0]
   #update the running totals
@@ -536,53 +549,19 @@ if exclude_html_format then
   return 200, "text", "#{header_row.join("\t")}\n#{report_row_formatted}"
 end
 
-
+###########################################################################
+#BULK UPDATES FORM AS QUERY RESULTS
+if bulk_update then
+  return 200, "text/html", BulkUpdate.form(header_row, report_row_formatted)
+end #if bulk_update
+#END BULK UPDATES
+##############################################################################
 
    #prepend the report heading, wrap the whole report in html tags
-  report_html << %Q~<!DOCTYPE html><html lang="en"><head><title>#{$APPLICATION_NAME} Report - #{report_name}</title>
-    <style>
-    html, body {
-      font-family:helvetica, sans-serif;
-      font-size: 14pt;
-      background-color: #dcdcc8;
-      width:100%;
-    }
-    #report {
-      font-family: "Trebuchet MS", Arial, Helvetica, sans-serif;
-      border-collapse: collapse;
-      width: 98%;
-    }
-    #report td, #report th {
-      border: 1px solid #ddd;
-      padding-left: 8px;
-    }
-
-    #report tr:nth-child(even){background-color: #f2f2e6;}
-
-    #report tr:hover {background-color: #ddd;}
-
-    #report th {
-      padding-top: 12px;
-      padding-bottom: 12px;
-      text-align: left;
-      background-color: #91b8b8;;
-      color: black;
-      font-size: 24px;
-    }
-
-    @media print {
-       div {
-        page-break-after: always;
-      }
-    }
-
-    img {
-      max-height: 200px;
-      width: auto;
-    }
-   </style>
-
-   </head><body>
+  report_html << %Q~<!DOCTYPE html><html lang="en">
+  <head><title>#{$APPLICATION_NAME} Report - #{report_name}</title>
+    <link rel="stylesheet" type="text/css" href="../application_styles/report.css" />
+  </head><body>
    <div style="width:100%;">
    <h1 style="width:100%;text-align:center;">#{report_name}</h1>
    <h2 style="width:100%;text-align:center;">Date: #{Time.now.strftime("%d %b %Y | Time: %l:%M %P")}</h2>
@@ -759,6 +738,7 @@ class Query < WEBrick::HTTPServlet::AbstractServlet
       end #instance_variables.each
 
 query_options_menu = %Q~<table style="width:100%;color:#8A8370;font-size:9pt;"><tr><th style="color:#8A8370;text-align:left;font-size:14pt;">query options</th></tr>
+            <tr><td><input type='checkbox' name='bulk_update' id='bulk_update' /> bulk update</td></tr>
             <tr><td><input type='checkbox' name='exclude_summary' id='exclude_summary' #{exclude_summary} /> exclude column one summary</td></tr>
             <tr><td><input type='checkbox' name='exclude_html_format' id='exculde_html_format' #{exclude_html_format} /> exclude html format</td></tr>
             <tr><td><input type='checkbox' name='report_format' id='report_format' #{report_format} /> label report format</td></tr>
@@ -1585,7 +1565,7 @@ class Menu
         scope = ''
       end
 
-    html << %Q~<button class="collapsible" id='button_#{attribute.downcase}' >&#8227; #{attribute.downcase.gsub(/_/,' ')}</button>~
+    html << %Q~<div class="collapsible" id='button_#{attribute.downcase}' >&#8227; #{attribute.downcase.gsub(/_/,' ')}</div>~
     html << %Q~<div class="attributes">~
 
       current_attribute_initial = String.new() #when this changes insert a separator
@@ -2247,6 +2227,179 @@ end
 end #Class SaveItems
 
 
+##################################################################
+# BULKUPDATE
+#
+##################################################################
+class BulkUpdate < WEBrick::HTTPServlet::AbstractServlet
+
+  attr_accessor :form
+
+  #prepare class for either get or post requests
+  def do_GET(request, response)
+    status, content_type, body = bulk_update(request)
+    response.status = status
+    response['Content-Type'] = content_type
+    response.body = body
+  end
+
+  def do_POST(request, response)
+    status, content_type, body = bulk_update(request)
+    response.status = status
+    response['Content-Type'] = content_type
+    response.body = body
+  end
+
+  def bulk_update(request)
+
+    $body = String.new()
+    update_items = Array.new()
+    update_fields = Hash.new()
+
+    request.query.each do | field_filter, value |
+
+      field = field_filter.gsub('_filter','')
+
+      if field.match(/^\d+$/) && field.to_i == value.to_i then
+        update_items << value.to_i
+      else
+        if value != nil && value != '' then
+          update_fields[field] = value
+        end #if ! nil
+      end
+    end #request.foreach
+
+    #no reason to continue if there are no update values
+    if update_fields.length == 0 then
+      return 200, "text/html", %Q~<!DOCTYPE html><html lang="en"><head>
+      <link rel="stylesheet" type="text/css" href="../application_styles/application.css" />
+      <link rel="stylesheet" type="text/css" href="../application_styles/report.css" />
+      <title>#{$APPLICATION_NAME} BULK UPDATE</title>
+      </head>
+      <body><h2>No field values provided for update<span style="width:100%;color:#8A8370;font-size:9pt;">close browser tab if finshed | click browser back to return to bulk update</span></h2>
+      </body></html>~
+    end
+
+    #update the fields with new values
+    update_items.each do | id |
+      update_fields.each do | field_name, value |
+          $body << %Q~<tr><td>#{id}</td><td>#{$collection.items[id].title}</td><td>#{field_name}</td><td>#{value}</td></tr>~
+          $collection.items[id].instance_variable_set("@#{field_name}", value.to_s)
+      end #field value
+
+      $collection.add($collection.items[id])
+
+    end #update_items.each
+
+    #return a page showing the updated fields and values
+    return 200, "text/html", %Q~<!DOCTYPE html><html lang="en"><head>
+    <link rel="stylesheet" type="text/css" href="../application_styles/application.css" />
+    <link rel="stylesheet" type="text/css" href="../application_styles/report.css" />
+    <title>#{$APPLICATION_NAME} BULK UPDATE</title>
+    </head>
+    <body><h2>Bulk Update Results<span style="width:100%;color:#8A8370;font-size:9pt;">close browser tab if finshed | click browser back to return to bulk update</span></h2>
+      <table id='report'><tr><th>item id</th><th>item name</th><th>field</th><th>new value</th></tr>
+        #{$body}
+      </table>
+    </body></html>~
+  end #bulk_update
+
+
+
+###################################################
+  def self.form(header_row, report_row_formatted)
+
+    #get the field names from a new blank item object
+    bulk_update_fields = String.new()
+
+    row = Item.new()
+    row.instance_variables.sort.each do |var|
+      value, display = var.to_s, var.to_s
+
+      #skip over the id and added fields; id is a unique record identifier,
+      #added is last modified date-time
+      next if var.match(/^@id|@added$/)
+
+      type = 'text'
+      #give acquired and completed input boxes calendar widget
+      if var.match(/^@acquired|@completed$/) then
+        type = 'date'
+      end
+      #give quantity and number_bases input boxes number type drop down
+      if var.match(/^@quantity|@number_bases$/) then
+        type = 'number'
+      end
+
+      #clean up the instance variable names
+      value.gsub!(/@/,'')
+      display.gsub!(/@/,'')
+      display.gsub!(/_/,' ')
+
+      #create the html table rows with field names and text boxes
+      bulk_update_fields << %Q~<span style="display:inline-block;width:10em;">#{display}</span><span><input type='#{type}' id='#{value}_filter' name='#{value}_filter' /></span><br />~
+    end #each instance_variables
+
+
+    #return the html bulk update form
+    return %Q~<!DOCTYPE html><html lang="en">
+<head>
+  <link rel="stylesheet" type="text/css" href="../application_styles/application.css" />
+  <link rel="stylesheet" type="text/css" href="../application_styles/report.css" />
+
+  <script type="text/javascript">
+  //used to fill in edit form from picklists
+  function fill_form_field(form_field, form_value)
+  {
+    document.getElementById(form_field).value=form_value;
+  }
+
+
+  </script>
+  <title>#{$APPLICATION_NAME} BULK UPDATE</title>
+</head>
+<body>
+      <form id='bulk_update' action='/bulk_update' method='post'>
+        <div id='update_fields' name='update_fields' style='width:25%; float:left;'><h2>Bulk Update Fields</h2>
+          <input type='submit' value="UPDATE ALL" /><br />
+          #{bulk_update_fields}
+        </div>
+
+        <div id='update_list' name='update_list' style='width:75%; float:right;'>
+          <div id='button_items' class="collapsible" >&#8227; view selected items</div>
+          <div id='item_list' class="attributes" style="overflow:auto;">
+            <table id='report' id='report' style="width:100%;">
+              <tr><th>Update</th><th>#{header_row.join("</th><th>")}</th></tr>
+              #{report_row_formatted}
+            </table>
+          </div>
+      </form>
+
+      <div class="collapsible" >&#8227; view common attributes</div>
+        <div class="attributes" style="width:100%;">
+          <div id="menu" class="menu" style="width:100%;">
+            #{Menu.new('QUERY',$PICKLISTS).html}
+          </div>
+        </div>
+    </div>
+
+  #{Collapsible_javascript.new.script}
+
+  <!-- INIT ON PAGE LOAD -->
+  <script>
+    window.addEventListener("DOMContentLoaded", function(){slist("sortlist");});
+  </script>
+
+</body></html>~
+
+  end #of form
+
+
+
+end #Class BulkUpdate
+
+
+
+
 
 
 ##################################################################
@@ -2382,8 +2535,6 @@ def select(field, term, scope)
       if field == 'any' then
         #loop through item fields
         item.instance_variables.each do | field_name |
-print "CHECKING: #{field_name} = #{item.instance_eval(field_name.to_s)}"
-
           if item.instance_eval(field_name.to_s).to_s.match(/#{match_term}/i) then
             subset[key] = item
           end
@@ -2546,6 +2697,7 @@ if $0 == __FILE__ then
   server.mount "/labels", QueryResults
   server.mount "/quit", Quit
   server.mount "/peek", PeekItem
+  server.mount "/bulk_update", BulkUpdate
 
   #open the default browser and load items page
   link = "http://localhost:8000/items"
