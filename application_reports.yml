@@ -102,6 +102,14 @@ Book Physical Inventory: !ruby/hash-with-ivars:Report
     :@report_format: ''
     :@exclude_html_format: ''
     :@exclude_summary: ''
+    :@quantity_order: ''
+    :@quantity_filter: ''
+    :@quantity_exact: ''
+    :@quantity_sort: ''
+    :@date_read_order: ''
+    :@date_read_filter: ''
+    :@date_read_exact: ''
+    :@date_read_sort: ''
   elements: {}
 EBook Inventory: !ruby/hash-with-ivars:Report
   ivars:
