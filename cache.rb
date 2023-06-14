@@ -2818,7 +2818,7 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
       #making sure genres in both completed and acquired use the same color
       color_hash[$collection.items[key].genre] = (colors['reds'] + colors['yellows'] + colors['blues']).sample
 #      color_hash[$collection.items[key].genre] = colors.flatten.sample
-  end
+    end
 
 
     subset_ids.each do | key |
@@ -2830,14 +2830,14 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
       if $collection.items[key].acquired == '' then $collection.items[key].acquired = '2018-01-01' end
 
       #populate the acquisition hash of hashes keyed by date of read/acquisition
-      if $collection.items[key].acquired != '' then
+      if $collection.items[key].acquired != '' && $collection.items[key].acquired != nil then
         #increment the hash[genre][acquistion-date] count/quantity
         acquisition_hash[$collection.items[key].genre][$collection.items[key].acquired] = acquisition_hash[$collection.items[key].genre][$collection.items[key].acquired].to_i + qty
         add_to_detail = 'Y'
         acq_count = acq_count + qty
       end
       #populate the read hash of hashes keyed by date of completion/acquistion
-      if $collection.items[key].date_read != '' then
+      if $collection.items[key].date_read != '' && $collection.items[key].date_read != nil then
         #increment the hash[genre][date_read] count/quantity
         read_hash[$collection.items[key].genre][$collection.items[key].date_read] = read_hash[$collection.items[key].genre][$collection.items[key].date_read].to_i + qty
         add_to_detail = 'Y'
@@ -2870,7 +2870,7 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
         traces << %Q~var #{var_name} = {
           type: "scatter",
           mode: "markers",
-          name: '#{genre} (C)',
+          name: '#{genre} (R)',
           x: ['#{all_dates.join("','")}'],
           y: [#{all_qty.join(',')}],
           legendgroup: '#{genre}',
