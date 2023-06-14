@@ -108,7 +108,9 @@ attr_accessor :report_name,
   :item_image_order,    :item_image_filter,    :item_image_exact,       :item_image_sort,
   :web_order,           :web_filter,           :web_exact,              :web_sort,
   :notes_order,         :notes_filter,         :notes_exact,            :notes_sort,
+  :quantity_order,      :quantity_filter,      :quantity_exact,         :quantity_sort,
 
+  :date_read_order,     :date_read_filter,     :date_read_exact,        :date_read_sort,
   :isbn_order,              :isbn_filter,                :isbn_exact,               :isbn_sort,
   :authors_order,           :authors_filter,             :authors_exact,            :authors_sort,
   :pages_order,             :pages_filter,               :pages_exact,              :pages_sort,
@@ -139,7 +141,9 @@ attr_accessor :report_name,
     item_image_order = nil,    item_image_filter = nil,    item_image_exact = nil,       item_image_sort = nil,
     web_order = nil,           web_filter = nil,           web_exact = nil,              web_sort = nil,
     notes_order = nil,         notes_filter = nil,         notes_exact = nil,            notes_sort = nil,
+    quantity_order = nil,      quantity_filter = nil,      quantity_exact = nil,         quantity_sort = nil,
 
+    date_read_order = nil,       date_read_filter = nil,         date_read_exact = nil,        date_read_sort = nil,
     isbn_order=nil,              isbn_filter=nil,                isbn_exact=nil,               isbn_sort=nil,
     authors_order=nil,           authors_filter=nil,             authors_exact=nil,            authors_sort=nil,
     pages_order=nil,             pages_filter=nil,               pages_exact=nil,              pages_sort=nil,
@@ -216,7 +220,10 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
   def query_results(request)
 
     #check and save the query parameters for later recall if a query name has been provided
-    if request.query['query_name'] && request.query['query_name'].to_s != ''
+    if request.query['query_name'] &&              #save/update report if named
+       request.query['query_name'].to_s != '' &&   #unless report named ''
+       request.query['chart'].to_s != 'on' &&      #unless creating charts
+       request.query['bulk_update'].to_s != 'on'   #unless doing bulk updates
       save_report(request.query)
     end #if query name
 
@@ -241,6 +248,15 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
 
     bulk_update = request.query['bulk_update']
     request.query.delete('bulk_update')
+
+    chart = request.query['chart']
+    request.query.delete('chart')
+
+    chart_type = request.query['chart_type']
+    request.query.delete('chart_type')
+
+    chart_qty = request.query['chart_qty']
+    request.query.delete('chart_qty')
 
     select_by = Array.new() #to pass to report for summary
 
@@ -343,13 +359,32 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
     subset_ids = $collection.sort(subset, sort_fields)
     ##### At this point subset_ids now contains ids of all records that fit the search criteria all in the correct sort order
 
+    ###########################################################################
+    #CHART QUERY RESULTS
+    #puts "***************************CHART:  #{chart}*******************************"
+
+    if chart then
+
+      #sort the ids so the detail listing matches chart
+      if chart_type != 'timeline' then
+        subset_ids = $collection.sort(subset, sort_fields)
+      else
+        subset_ids = $collection.sort(subset, ['acquired','date_read'])
+        subset_ids.reverse!
+      end
+      #call and return the chart
+      return 200, "text/html", Chart.display(subset_ids, query, chart_type, chart_qty)
+    end #if bulk_update
+    #END BULK UPDATES
+    ##############################################################################
+
     ##### Time to format the report
-    format_results(subset_ids, query, sort_fields, select_by, report_format, request.query['query_name'].to_s, exclude_summary, exclude_html_format, bulk_update)
+    format_results(subset_ids, query, sort_fields, select_by, report_format, request.query['query_name'].to_s, exclude_summary, exclude_html_format, bulk_update, chart)
 
 end # query_results
 
 
-def format_results(subset_ids, query, sort_fields=nil, select_by=nil, report_format=nil, report_name=nil, exclude_summary=nil, exclude_html_format=nil, bulk_update=nil)
+def format_results(subset_ids, query, sort_fields=nil, select_by=nil, report_format=nil, report_name=nil, exclude_summary=nil, exclude_html_format=nil, bulk_update=nil, chart=nil)
 
   #method variables
   report_html  = String.new
@@ -421,12 +456,14 @@ def format_results(subset_ids, query, sort_fields=nil, select_by=nil, report_for
   summary_replacement_cost  = 0
   summary_replacement_value = 0
   summary_genre             = ''
+  summary_quantity          = 0
 
 
   #report totals
   total_count               = 0
   total_replacement_cost    = 0
   total_replacement_value   = 0
+  total_quantity            = 0
 
   #if bulk update is being used we need an extra header column heading
   bulk_update_header = ''
@@ -443,7 +480,7 @@ report.each do |row|
   if row[0].to_s != current_summary_value && current_summary_value.to_s != '' then
 
     if exclude_summary == nil then
-      report_row_formatted << field_summary(summary_count, summary_field_name, current_summary_value, summary_replacement_cost, summary_replacement_value, summary_genre, report_format)
+      report_row_formatted << field_summary(summary_count, summary_field_name, current_summary_value, summary_replacement_cost, summary_replacement_value, summary_quantity, summary_genre, report_format)
       report_row_formatted << %Q~<tr>#{bulk_update_header}<th>#{header_row.join('</th><th>')}</th></tr>\n~
     end
 
@@ -451,10 +488,12 @@ report.each do |row|
     total_count               = total_count             + summary_count
     total_replacement_cost    = total_replacement_cost  + summary_replacement_cost
     total_replacement_value   = total_replacement_value + summary_replacement_value
+    total_quantity            = total_quantity          + summary_quantity
     #reset the summary running totals
     summary_count             = 0
     summary_replacement_cost  = 0
     summary_replacement_value = 0
+    summary_quantity          = 0
 
     summary_genre             = ''
     summary_tags              = ''
@@ -470,21 +509,21 @@ report.each do |row|
 
   #if id is present in report format it as a link to edit the item
   if id_format != nil && row[id_format].to_s != '' && row[id_format] != 0 then
-    row[id_format] = %Q~<a href="http://localhost:8000/manage_item?id=#{row[id_format]}" target="_blank">#{row[id_format]}</a>~
+    row[id_format] = %Q~<a href="#{$SERVER}:#{$PORT}/manage_item?id=#{row[id_format]}" target="_blank">#{row[id_format]}</a>~
   end
 
   #if item_image is present in report format it as a image, not the item_image name
   if image_format != nil && row[image_format].to_s != '' && row[image_format] != 0 then
     formatted_pictures = String.new()
     row[image_format].split(',').each do |picture|
-           formatted_pictures << %Q~<img src="http://localhost:8000/application_images/#{picture}" alt=#{picture} /> ~
+           formatted_pictures << %Q~<img src="#{$SERVER}:#{$PORT}/application_images/#{picture}" alt=#{picture} /> ~
     end
     row[image_format] = formatted_pictures
   end
 
   #if icon_image is present in report format it as a image, not the icon_image name
   if icon_format != nil && row[icon_format].to_s != '' && row[icon_format] != 0 then
-    row[icon_format] = %Q~<img style="height:100px;width:75px;" src="http://localhost:8000/application_images/#{row[icon_format]}" />~
+    row[icon_format] = %Q~<img style="height:100px;width:75px;" src="#{$SERVER}:#{$PORT}/application_images/#{row[icon_format]}" />~
   end
 
   #if web is present in report format it as a link, not the bare url
@@ -492,7 +531,7 @@ report.each do |row|
     if row[web_format].match(/^http/) then
       row[web_format] = %Q~<a href="#{row[web_format]}" target="_blank" >#{row[web_format]}</a>~
     else
-      row[web_format] = %Q~<a href="http://localhost:8000/#{row[web_format]}" target="_blank" >#{row[web_format]}</a>~
+      row[web_format] = %Q~<a href="#{$SERVER}:#{$PORT}/#{row[web_format]}" target="_blank" >#{row[web_format]}</a>~
     end
   end
 
@@ -511,6 +550,7 @@ report.each do |row|
   summary_count += 1
   summary_replacement_cost  = summary_replacement_cost  + $collection.items[item_key.to_i].cost.to_f
   summary_replacement_value = summary_replacement_value + $collection.items[item_key.to_i].value.to_f
+  summary_quantity          = summary_quantity          + $collection.items[item_key.to_i].quantity.to_i
 
   #used in creating drawer labels
   summary_genre  << %Q~<b>#{$collection.items[item_key.to_i].genre}~
@@ -526,13 +566,13 @@ end #each row
 
   #append the last location summary row to report
   if exclude_summary == nil then
-    report_row_formatted << field_summary(summary_count, summary_field_name, current_summary_value, summary_replacement_cost, summary_replacement_value, summary_genre, report_format)
+    report_row_formatted << field_summary(summary_count, summary_field_name, current_summary_value, summary_replacement_cost, summary_replacement_value, summary_quantity, summary_genre, report_format)
   end
     #update the report totals
     total_count               = total_count             + summary_count
     total_replacement_cost    = total_replacement_cost  + summary_replacement_cost
     total_replacement_value   = total_replacement_value + summary_replacement_value
-
+    total_quantity            = total_quantity          + summary_quantity
 
 #return a text only report if requested so... remove html code
 if exclude_html_format then
@@ -557,6 +597,7 @@ end #if bulk_update
 #END BULK UPDATES
 ##############################################################################
 
+
    #prepend the report heading, wrap the whole report in html tags
   report_html << %Q~<!DOCTYPE html><html lang="en">
   <head><title>#{$APPLICATION_NAME} Report - #{report_name}</title>
@@ -568,7 +609,7 @@ end #if bulk_update
 
     <table style="width:40%;margin:auto;font-weight:bold;">
       <tr>
-        <td>Records: #{total_count}</td>
+        <td>Records: #{total_count} | Books: #{total_quantity}</td>
         <td>#{select_by.join(' ')}</td>
       </tr>
       <tr>
@@ -592,7 +633,7 @@ end #format_results
 
 
   #create and return summary row
-  def field_summary(summary_count, summary_field, summary_field_value, summary_cost='', summary_value='', summary_genre='',report_format=nil, colspan=20)
+  def field_summary(summary_count, summary_field, summary_field_value, summary_cost='', summary_value='', summary_quantity='', summary_genre='',report_format=nil, colspan=20)
     summary_row = String.new
     summary_cost = format("%.2f", summary_cost)
     summary_value = format("%.2f", summary_value)
@@ -603,13 +644,14 @@ end #format_results
     genres.uniq!
 
     if report_format.to_s == '' then
-    summary_row = %Q~<tr style="background-color:#dddddd;font-size:14pt;padding:8px;font-decoration:bold;"><td colspan=#{colspan}> #{summary_count} items in #{summary_field} #{summary_field_value} | cost: $ #{summary_cost} | sell value: $ #{summary_value}</td></tr>~
+    summary_row = %Q~<tr style="background-color:#dddddd;font-size:14pt;padding:8px;font-decoration:bold;"><td colspan=#{colspan}> #{summary_count} items in #{summary_field} #{summary_field_value} | quantity: #{summary_quantity} | replacement cost: $ #{summary_cost} | sell value: $ #{summary_value}</td></tr>~
   else
     summary_row = %Q~</table>
     <div style="display:inline-block;white-space:nowrap;font-size:97pt;height:100%;width:20%;float:left;">
       #{summary_field_value}
       <div style="display: inline-block;white-space:nowrap;font-size:24pt;">
         #{genres.join('<br />')}<br />
+        <span style="font-style:italic;">#{summary_quantity} quantity</span>
       </div>
     </div>
 
@@ -738,10 +780,14 @@ class Query < WEBrick::HTTPServlet::AbstractServlet
       end #instance_variables.each
 
 query_options_menu = %Q~<table style="width:100%;color:#8A8370;font-size:9pt;"><tr><th style="color:#8A8370;text-align:left;font-size:14pt;">query options</th></tr>
-            <tr><td><input type='checkbox' name='bulk_update' id='bulk_update' /> bulk update</td></tr>
             <tr><td><input type='checkbox' name='exclude_summary' id='exclude_summary' #{exclude_summary} /> exclude column one summary</td></tr>
             <tr><td><input type='checkbox' name='exclude_html_format' id='exculde_html_format' #{exclude_html_format} /> exclude html format</td></tr>
             <tr><td><input type='checkbox' name='report_format' id='report_format' #{report_format} /> label report format</td></tr>
+            <tr><td><input type='checkbox' name='bulk_update' id='bulk_update' /> bulk update</td></tr>
+            <tr><td><input type='checkbox' name='chart' id='chart' /> chart
+                    <select name='chart_type' id='chart_type'><option value='pie'>pie</option><option value='bar'>bar</option><option value='bar-stacked'>bar-stacked</option><option value='bar-grouped'>bar-grouped</option><option value='timeline'>timeline</option></select>
+                    <input type='checkbox' name='chart_qty' id='chart_qty' /> sum quantity<br />&nbsp;&nbsp;&nbsp;&nbsp;(default is to count records)
+            </td></tr>
           </table>~
 
     query_html = %Q^<h1 style='width=100%;text-align:center;'>Query</h1>
@@ -884,17 +930,19 @@ class PeekItem < WEBrick::HTTPServlet::AbstractServlet
   item_image   = $collection.items[key].item_image
   web_url      = $collection.items[key].web
   notes        = $collection.items[key].notes
+  quantity     = $collection.items[key].quantity
   #application specific fields
   edition      = $collection.items[key].edition
   authors      = $collection.items[key].authors
-  publisher 	= $collection.items[key].publisher
+  publisher 	 = $collection.items[key].publisher
   format       = $collection.items[key].format
   disposition  = $collection.items[key].disposition
-  edition 	= $collection.items[key].edition
-  isbn 	= $collection.items[key].isbn
-  language 	= $collection.items[key].language
-  pages 	= $collection.items[key].pages
+  edition 	   = $collection.items[key].edition
+  isbn 	       = $collection.items[key].isbn
+  language 	   = $collection.items[key].language
+  pages 	     = $collection.items[key].pages
   publication_date = $collection.items[key].publication_date
+  date_read    = $collection.items[key].date_read
 
  item_images = String.new()
  item_image.split(',').each do |image|
@@ -934,10 +982,11 @@ html << %Q~<html lang="en">
   <br style="clear:both;" />
 
         <div class="section">&#8227; id: #{id}</div>
-          <div class="label" style="width:25%;"><span class='identifier'>author(s)</span><br />#{authors}</div>
-          <div class="label" style="width:25%;"><span class='identifier'>format</span><br />#{format}</div>
-          <div class="label" style="width:25%;"><span class='identifier'>pages</span><br />#{pages}</div>
-          <div class="label" style="width:25%;"><span class='identifier'>location</span><br />#{location}</div>
+          <div class="label" style="width:20%;"><span class='identifier'>author(s)</span><br />#{authors}</div>
+          <div class="label" style="width:20%;"><span class='identifier'>format</span><br />#{format}</div>
+          <div class="label" style="width:20%;"><span class='identifier'>pages</span><br />#{pages}</div>
+          <div class="label" style="width:20%;"><span class='identifier'>location</span><br />#{location}</div>
+          <div class="label" style="width:20%;"><span class='identifier'>quantity</span><br />#{quantity}</div>
           <br style="clear:both;" />
           <div class="label" style="width:25%;"><span class='identifier'>isbn</span><br />#{isbn}</div>
           <div class="label" style="width:25%;"><span class='identifier'>edition</span><br />#{edition}</div>
@@ -951,6 +1000,7 @@ html << %Q~<html lang="en">
           <div class="label" style="width:25%;"><span class='identifier'>value</span><br />#{value}</div>
           <br style="clear:both;" />
           <div class="label" style="width:50%;"><span class='identifier'>acquired date</span><br />#{acquired}</div>
+          <div class="label" style="width:50%;"><span class='identifier'>date read</span><br />#{date_read}</div>
           <div class="label" style="width:50%;"><span class='identifier'>added date</span><br />#{added}</div>
           <br style="clear:both;" />
           <div class="label" style="width:50%;"><span class='identifier'>genre</span><br />#{genre}</div>
@@ -1055,11 +1105,12 @@ class ShowItems < WEBrick::HTTPServlet::AbstractServlet
         item_locations[location] = item_locations[location].to_s. + ",#{id.to_s}"
       cost         = $collection.items[key].cost
       value        = $collection.items[key].value
-      acquired         = $collection.items[key].acquired
+      acquired     = $collection.items[key].acquired
       added        = $collection.items[key].added
       image_dir    = $collection.items[key].image_dir
       icon_image   = $collection.items[key].icon_image
       item_image   = $collection.items[key].item_image
+      quantity     = $collection.items[key].quantity
 
       web          = $collection.items[key].web
       notes            = $collection.items[key].notes
@@ -1281,6 +1332,8 @@ class ManageItems < WEBrick::HTTPServlet::AbstractServlet
           $collection.items[id].item_image,
           $collection.items[id].web,
           $collection.items[id].notes,
+          $collection.items[id].quantity,
+          $collection.items[id].date_read,
           $collection.items[id].format,
           $collection.items[id].publisher,
           $collection.items[id].isbn,
@@ -1315,6 +1368,8 @@ class ManageItems < WEBrick::HTTPServlet::AbstractServlet
         item_image="",
         web="",
         notes="",
+        quantity="",
+        date_read="",
         format="paper back",
         publisher="",
         isbn="",
@@ -1412,6 +1467,8 @@ return html = %Q~<!DOCTYPE html>
             <div class="item" style="float:left;padding-bottom:2px;">tags<br /><input name='tags' id='tags' type='text' size="31rem" value='#{tags}' /></div>
             <br style="clear:both;" />
             <div class="item" style="float:left;padding-bottom:2px;">location<br /><input name='location' id='location' size="11rem" type='text' value='#{location}' /></div>
+            <div class="item" style="float:left;padding-bottom:2px;">quantity<br /><input name='quantity' id='quantity' size="11rem" type='number' value='#{quantity}' /></div>
+            <div class="item" style="float:left;padding-bottom:2px;">date read<br /><input name='date_read' id='date_read' size="11rem" type='date' value='#{date_read}' /></div>
         </div> <!-- end core div -->
 
         <button type="button" class="collapsible" id="button_publishing_information" style="color:#8a8370;background-color:#c9c9b7;padding:1px;">&#8227; publishing information</button>
@@ -1489,13 +1546,13 @@ class Banner
 
   def html
     return %Q~<div class="item" style="width:100%;text-align:center;">
-      <a href="http://localhost:8000/items"><img src='../application_resources/application_banner.png' alt='application banner image' style="80%;"/></a><br />
+      <a href="#{$SERVER}:#{$PORT}/items"><img src='../application_resources/application_banner.png' alt='application banner image' style="80%;"/></a><br />
     <div class="sibling-fade" style="width:90%;">
-        <a href="http://localhost:8000/items">Search</a>
-        <a href="http://localhost:8000/manage_item">Add Item</a>
-        <a href="http://localhost:8000/query">Query</a>
-        <a target="_new" href="http://localhost:8000/application_resources/about.html">Help</a>
-        <a href="http://localhost:8000/quit">Quit</a>
+        <a href="#{$SERVER}:#{$PORT}/items">Search</a>
+        <a href="#{$SERVER}:#{$PORT}/manage_item">Add Item</a>
+        <a href="#{$SERVER}:#{$PORT}/query">Query</a>
+        <a target="_new" href="#{$SERVER}:#{$PORT}/application_resources/about.html">Help</a>
+        <a href="#{$SERVER}:#{$PORT}/quit">Quit</a>
     </div>
 </div>
     ~
@@ -1565,7 +1622,7 @@ class Menu
         scope = ''
       end
 
-    html << %Q~<div class="collapsible" id='button_#{attribute.downcase}' >&#8227; #{attribute.downcase.gsub(/_/,' ')}</div>\n~
+    html << %Q~\n<div class="collapsible" id='button_#{attribute.downcase}' >&#8227; #{attribute.downcase.gsub(/_/,' ')}</div>\n~
     html << %Q~<div class="attributes">\n~
 
       current_attribute_initial = String.new() #when this changes insert a separator
@@ -1984,7 +2041,7 @@ class DeleteItem < WEBrick::HTTPServlet::AbstractServlet
 #       puts "do_POST 1"
     else
       warning = %Q~<script type="text/javascript">window.onload = function(){alert('You must first enable the delete before deleting an item from the database.');}</script>~
-      status, content_type, body = 200, "text/html", %Q~<html><head>#{warning}<meta http-equiv="refresh" content="0;url=http://localhost:8000/manage_item?id=#{request.query['id']}"></head><body></body></html>~
+      status, content_type, body = 200, "text/html", %Q~<html><head>#{warning}<meta http-equiv="refresh" content="0;url=#{$SERVER}:#{$PORT}/manage_item?id=#{request.query['id']}"></head><body></body></html>~
 #      puts "do_POST else"
     end
     response.status = status
@@ -2007,12 +2064,12 @@ class DeleteItem < WEBrick::HTTPServlet::AbstractServlet
     confirmed.strip!
 
     if confirmed != 'confirmed' or id.match(/[^0-9]+/) then
-          return 200, "text/html", %Q~<html><head><meta http-equiv="refresh" content="0;url=http://localhost:8000/items"></head><body>Input doesn't validate</body></html>~
+          return 200, "text/html", %Q~<html><head><meta http-equiv="refresh" content="0;url=#{$SERVER}:#{$PORT}/items"></head><body>Input doesn't validate</body></html>~
     else
        $collection.delete(id.to_i)
 
     #call first page with new/updated item
-    return 200, "text/html", %Q~<html><head><meta http-equiv="refresh" content="0;url=http://localhost:8000/items"></head><body></body></html>~
+    return 200, "text/html", %Q~<html><head><meta http-equiv="refresh" content="0;url=#{$SERVER}:#{$PORT}/items"></head><body></body></html>~
     end #if else
 
   end #delete_item
@@ -2054,7 +2111,9 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
     item_image   = request.query['item_image'].to_s.gsub(/[^\w\s\.\-\,\(\)\:\\]/,'')
     web          = request.query['web'].to_s.gsub(/[^\w\s\.\-\,\(\)\\\:\/\?\&=]/,'')
     notes        = request.query['notes'].to_s.gsub(/[^\w\s\.\-\,\(\)\;\&\:\'\"]/,'')
+    quantity     = request.query['quantity'].to_s.gsub(/\D/,'')
 
+    date_read    = request.query['date_read'].to_s.gsub(/[^\w\s\.\-,()]/,'')
     format       = request.query['format'].to_s.gsub(/[^\w\s\.\-\,\(\)]/,'')
     publisher    = request.query['publisher'].to_s.gsub(/[^\w\s\.\-\,\(\)]/,'')
     publication_date = request.query['publication_date'].to_s.gsub(/[^\w\s\.\-,()]/,'')
@@ -2183,12 +2242,14 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
   new_item.item_image,
   new_item.web,
   new_item.notes,
+  new_item.quantity,
   new_item.isbn,
   new_item.authors,
   new_item.pages,
   new_item.publisher,
   new_item.disposition,
   new_item.publication_date,
+  new_item.date_read,
   new_item.format,
   new_item.language,
   new_item.edition =
@@ -2207,12 +2268,14 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
   item_image,
   web,
   notes,
+  quantity,
   isbn,
   authors,
   pages,
   publisher,
   disposition,
   publication_date,
+  date_read,
   format,
   language,
   edition
@@ -2221,7 +2284,7 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
   $collection.add(new_item)
 
   #call first page with new/updated item only (?)
-  return 200, "text/html", %Q~<html><head><meta http-equiv="refresh" content="0;url=http://localhost:8000/items?show_id=#{id}"></head><body></body></html>~
+  return 200, "text/html", %Q~<html><head><meta http-equiv="refresh" content="0;url=#{$SERVER}:#{$PORT}/items?show_id=#{id}"></head><body></body></html>~
 
 end
 end #Class SaveItems
@@ -2322,11 +2385,11 @@ class BulkUpdate < WEBrick::HTTPServlet::AbstractServlet
 
       type = 'text'
       #give acquired and completed input boxes calendar widget
-      if var.match(/^@acquired|@completed$/) then
+      if var.match(/^@acquired$/) then
         type = 'date'
       end
       #give quantity and number_bases input boxes number type drop down
-      if var.match(/^@quantity|@number_bases$/) then
+      if var.match(/^@quantity$/) then
         type = 'number'
       end
 
@@ -2364,8 +2427,7 @@ class BulkUpdate < WEBrick::HTTPServlet::AbstractServlet
           #{bulk_update_fields}
         </div>
 
-      <div id='update_list' name='update_list' style='width:75%; float:right;'>
-
+        <div id='update_list' name='update_list' style='width:75%; float:right;'>
           <div id='button_items' class="collapsible" >&#8227; view selected items</div>
           <div id='item_list' class="attributes" style="overflow:auto;">
             <table id='report' id='report' style="width:100%;">
@@ -2375,9 +2437,9 @@ class BulkUpdate < WEBrick::HTTPServlet::AbstractServlet
           </div>
       </form>
 
-        <div id="menu" class="menu" style="float:left;width:100%;">
-          #{Menu.new('QUERY',$PICKLISTS).html}
-        </div>
+          <div id="menu" class="menu" style="width:100%;">
+            #{Menu.new('QUERY',$PICKLISTS).html}
+          </div>
     </div>
 
   #{Collapsible_javascript.new.script}
@@ -2394,6 +2456,525 @@ class BulkUpdate < WEBrick::HTTPServlet::AbstractServlet
 
 
 end #Class BulkUpdate
+
+
+
+
+
+
+
+##################################################################
+# Chart
+#
+##################################################################
+class Chart < WEBrick::HTTPServlet::AbstractServlet
+
+  attr_accessor :display
+
+  #prepare class for either get or post requests
+  def do_GET(request, response)
+    status, content_type, body = bulk_update(request)
+    response.status = status
+    response['Content-Type'] = content_type
+    response.body = body
+  end
+
+  def do_POST(request, response)
+    status, content_type, body = bulk_update(request)
+    response.status = status
+    response['Content-Type'] = content_type
+    response.body = body
+  end
+
+  #returns link to manage item for a given id:
+  def self.link_id(id)
+
+    return %Q~<a href="#{$SERVER}:#{$PORT}/manage_item?id=#{id}" target="_blank">#{id}</a>~
+
+  end #link_id
+
+
+  #########################################################################################
+  # DISPLAY
+  #Determines chart type and creates plotly Javascript
+  def self.display(subset_ids, query, chart_type, chart_qty)
+
+    chart_fields = Array.new()
+
+    #find out which fields are included by checking the order value. If it has
+    #a value then it is to be plotted. Pie and simple Bar charts take a single field
+    query.each do | field |
+      if field[1]['order'] then
+        i = field[1]['order'].to_i - 1
+        chart_fields[i] = field[1]['name']
+      end
+    end
+
+    #make sure the correct number of data fields have been submitted
+    case chart_type
+      when "pie", "bar"
+        if chart_fields[0] == 0 or chart_fields[0] == nil then
+          details = "<h3>Pie and Bar charts require a field in order 1. Please try again.</h3>"
+          return html_output('', '', details, '', '', '')
+        end
+      when "bar-grouped", "bar-stacked"
+        if chart_fields[0] == 0 or chart_fields[0] == nil or chart_fields[1] == 0 or chart_fields[1] == nil then
+          details =  "<h3>Grouped Bar and Stacked Bar charts require two fields in orders 1 and 2. Please try again.</h3>"
+          return html_output('', '', details, '', '', '')
+      end
+    end #end case statement
+
+    $body = String.new()
+
+    #Plotly attributes
+    data = String.new()
+    layout = String.new()
+    traces = String.new()
+    #detail table following chart
+    details = String.new()
+    detail_header_row = String.new()
+    total_count = 0
+    #default to counting records unless summing quantity selected by user
+    count_of = chart_qty ? 'Quantity' : 'Records'
+    #fields selected by user to chart
+    sort_fields = Array.new()
+    primary_field = Hash.new() #is used for x axis (horizontal)
+    secondary_field = Hash.new() #is used for y axis (vertical)
+
+    colorway = ['#183a0a','#1c552a','#18714d','#068f74','#00ada0','#00cbce','#00e9ff','#00d0f9','#00b6f0','#009de3','#0083d1','#2f68bb','#474da0']
+
+    #extra color groupings used in timeline chart
+    colors = {
+      'greens' => ['rgb(0, 255, 255)','rgb(127, 255, 212)','rgb(69, 75, 27)','rgb(8, 143, 143)','rgb(170, 255, 0)','rgb(95, 158, 160)','rgb(9, 121, 105)','rgb(175, 225, 175)','rgb(223, 255, 0)','rgb(228, 208, 10)','rgb(0, 255, 255)','rgb(2, 48, 32)','rgb(125, 249, 255)','rgb(80, 200, 120)','rgb(95, 133, 117)','rgb(79, 121, 66)','rgb(34, 139, 34)','rgb(124, 252, 0)','rgb(0, 128, 0)','rgb(53, 94, 59)','rgb(0, 163, 108)','rgb(42, 170, 138)','rgb(76, 187, 23)','rgb(144, 238, 144)','rgb(50, 205, 50)','rgb(71, 135, 120)','rgb(11, 218, 81)','rgb(152, 251, 152)','rgb(138, 154, 91)','rgb(15, 255, 80)','rgb(236, 255, 220)','rgb(128, 128, 0)','rgb(193, 225, 193)','rgb(201, 204, 63)','rgb(180, 196, 36)','rgb(147, 197, 114)','rgb(150, 222, 209)','rgb(138, 154, 91)','rgb(46, 139, 87)','rgb(159, 226, 191)','rgb(0, 158, 96)','rgb(0, 255, 127)','rgb(0, 128, 128)','rgb(64, 224, 208)','rgb(196, 180, 84)','rgb(64, 181, 173)','rgb(64, 130, 109)'],
+      'blues' => ['rgb(0, 255, 255)','rgb(240, 255, 255)','rgb(137, 207, 240)','rgb(0, 0, 255)','rgb(115, 147, 179)','rgb(8, 143, 143)','rgb(0, 150, 255)','rgb(95, 158, 160)','rgb(0, 71, 171)','rgb(100, 149, 237)','rgb(0, 255, 255)','rgb(0, 0, 139)','rgb(111, 143, 175)','rgb(20, 52, 164)','rgb(125, 249, 255)','rgb(96, 130, 182)','rgb(0, 163, 108)','rgb(63, 0, 255)','rgb(93, 63, 211)','rgb(173, 216, 230)','rgb(25, 25, 112)','rgb(0, 0, 128)','rgb(31, 81, 255)','rgb(167, 199, 231)','rgb(204, 204, 255)','rgb(182, 208, 226)','rgb(150, 222, 209)','rgb(65, 105, 225)','rgb(15, 82, 186)','rgb(159, 226, 191)','rgb(135, 206, 235)','rgb(70, 130, 180)''rgb(0, 128, 128)','rgb(64, 224, 208)','rgb(4, 55, 242)','rgb(64, 181, 173)','rgb(8, 24, 168)'],
+      'yellows' => ['rgb(234, 221, 202)','rgb(255, 191, 0)','rgb(251, 206, 177)','rgb(245, 245, 220)','rgb(225, 193, 110)','rgb(255, 234, 0)','rgb(253, 218, 13)','rgb(255, 255, 143)','rgb(223, 255, 0)','rgb(228, 208, 10)','rgb(255, 248, 220)','rgb(255, 253, 208)','rgb(139, 128, 0)','rgb(250, 213, 165)','rgb(194, 178, 128)','rgb(238, 220, 130)','rgb(228, 155, 15)','rgb(255, 215, 0)','rgb(255, 192, 0)','rgb(218, 165, 32)','rgb(252, 245, 95)','rgb(255, 255, 240)','rgb(248, 222, 126)','rgb(240, 230, 140)','rgb(250, 250, 51)','rgb(251, 236, 93)','rgb(244, 187, 68)','rgb(255, 219, 88)','rgb(250, 218, 94)','rgb(255, 222, 173)','rgb(236, 255, 220)','rgb(255, 250, 160)','rgb(255, 229, 180)','rgb(201, 204, 63)','rgb(180, 196, 36)','rgb(147, 197, 114)','rgb(244, 196, 48)','rgb(243, 229, 171)','rgb(196, 180, 84)','rgb(245, 222, 179)','rgb(255, 255, 0)','rgb(255, 170, 51)'],
+      'whites' => ['rgb(237, 234, 222)','rgb(245, 245, 220)','rgb(249, 246, 238)','rgb(255, 248, 220)','rgb(255, 253, 208)','rgb(240, 234, 214)','rgb(255, 255, 240)','rgb(233, 220, 201)','rgb(255, 222, 173)','rgb(250, 249, 246)','rgb(252, 245, 229)','rgb(255, 229, 180)','rgb(226, 223, 210)','rgb(255, 245, 238)','rgb(243, 229, 171)','rgb(255, 255, 255)'],
+      'reds' => ['rgb(136, 8, 8)','rgb(170, 74, 68)','rgb(238, 75, 43)','rgb(165, 42, 42)','rgb(128, 0, 32)','rgb(110, 38, 14)','rgb(204, 85, 0)','rgb(233, 116, 81)','rgb(112, 41, 99)','rgb(210, 43, 43)','rgb(196, 30, 58)','rgb(215, 0, 64)','rgb(222, 49, 99)','rgb(210, 4, 45)','rgb(149, 69, 53)','rgb(129, 19, 49)','rgb(248, 131, 121)','rgb(129, 65, 65)','rgb(220, 20, 60)','rgb(139, 0, 0)','rgb(123, 24, 24)','rgb(154, 42, 42)','rgb(192, 64, 0)','rgb(128, 0, 0)','rgb(152, 104, 104)','rgb(119, 7, 55)','rgb(255, 49, 49)','rgb(74, 4, 4)','rgb(250, 160, 160)','rgb(236, 88, 0)','rgb(227, 83, 53)','rgb(169, 92, 104)','rgb(227, 11, 92)','rgb(255, 0, 0)','rgb(165, 42, 42)','rgb(145, 56, 49)','rgb(255, 68, 51)','rgb(149, 53, 83)','rgb(194, 30, 86)','rgb(224, 17, 95)','rgb(128, 70, 27)','rgb(250, 128, 114)','rgb(255, 36, 0)','rgb(250, 95, 85)','rgb(227, 115, 94)','rgb(124, 48, 48)','rgb(99, 3, 48)','rgb(164, 42, 4)','rgb(227, 66, 52)','rgb(114, 47, 55)'],
+      'purples' => ['rgb(159, 43, 104)','rgb(191, 64, 191)','rgb(128, 0, 32)','rgb(112, 41, 99)','rgb(170, 51, 106)','rgb(48, 25, 52)','rgb(72, 50, 72)','rgb(93, 63, 211)','rgb(230, 230, 250)','rgb(203, 195, 227)','rgb(207, 159, 255)','rgb(170, 152, 169)','rgb(224, 176, 255)','rgb(145, 95, 109)','rgb(119, 7, 55)','rgb(218, 112, 214)','rgb(195, 177, 225)','rgb(204, 204, 255)','rgb(103, 49, 71)','rgb(169, 92, 104)','rgb(128, 0, 128)','rgb(81, 65, 79)','rgb(149, 53, 83)','rgb(216, 191, 216)','rgb(99, 3, 48)','rgb(127, 0, 255)','rgb(114, 47, 55)','rgb(189, 181, 213)'],
+      'pinks' => ['rgb(159, 43, 104)','rgb(242, 210, 189)','rgb(222, 49, 99)','rgb(129, 19, 49)','rgb(255, 127, 80)','rgb(248, 131, 121)','rgb(220, 20, 60)','rgb(170, 51, 106)','rgb(201, 169, 166)','rgb(255, 0, 255)','rgb(255, 105, 180)','rgb(255, 182, 193)','rgb(255, 0, 255)','rgb(243, 207, 198)','rgb(119, 7, 55)','rgb(255, 16, 240)','rgb(218, 112, 214)','rgb(248, 200, 220)','rgb(250, 160, 160)','rgb(255, 192, 203)','rgb(248, 152, 128)','rgb(103, 49, 71)','rgb(169, 92, 104)','rgb(128, 0, 128)','rgb(227, 11, 92)','rgb(149, 53, 83)','rgb(243, 58, 106)','rgb(224, 191, 184)','rgb(194, 30, 86)','rgb(224, 17, 95)','rgb(250, 128, 114)','rgb(255, 245, 238)','rgb(216, 191, 216)','rgb(227, 115, 131)'],
+      'oranges' => ['rgb(255, 191, 0)','rgb(251, 206, 177)','rgb(242, 210, 189)','rgb(255, 172, 28)','rgb(205, 127, 50)','rgb(218, 160, 109)','rgb(204, 85, 0)','rgb(233, 116, 81)','rgb(227, 150, 62)','rgb(242, 140, 40)','rgb(210, 125, 45)','rgb(184, 115, 51)','rgb(255, 127, 80)','rgb(248, 131, 121)','rgb(139, 64, 0)','rgb(250, 213, 165)','rgb(228, 155, 15)','rgb(255, 192, 0)','rgb(218, 165, 32)','rgb(255, 213, 128)','rgb(192, 64, 0)','rgb(244, 187, 68)','rgb(255, 222, 173)','rgb(255, 95, 31)','rgb(204, 119, 34)','rgb(255, 165, 0)','rgb(250, 200, 152)','rgb(255, 229, 180)','rgb(236, 88, 0)','rgb(248, 152, 128)','rgb(227, 83, 53)','rgb(255, 117, 24)','rgb(255, 68, 51)','rgb(255, 95, 21)','rgb(250, 128, 114)','rgb(255, 245, 238)','rgb(160, 82, 45)','rgb(250, 95, 85)','rgb(240, 128, 0)','rgb(227, 115, 94)','rgb(255, 170, 51)'],
+      'grays' => ['rgb(178, 190, 181)','rgb(115, 147, 179)','rgb(54, 69, 79)','rgb(169, 169, 169)','rgb(96, 130, 182)','rgb(128, 128, 128)','rgb(129, 133, 137)','rgb(211, 211, 211)','rgb(137, 148, 153)','rgb(229, 228, 226)','rgb(138, 154, 91)','rgb(192, 192, 192)','rgb(112, 128, 144)','rgb(132, 136, 132)','rgb(113, 121, 126)'],
+      'browns' => ['rgb(234, 221, 202)','rgb(225, 193, 110)','rgb(205, 127, 50)','rgb(165, 42, 42)','rgb(218, 160, 109)','rgb(128, 0, 32)','rgb(233, 116, 81)','rgb(110, 38, 14)','rgb(193, 154, 107)','rgb(149, 69, 53)','rgb(123, 63, 0)','rgb(210, 125, 45)','rgb(111, 78, 55)','rgb(131, 67, 51)','rgb(184, 115, 51)','rgb(129, 65, 65)','rgb(92, 64, 51)','rgb(139, 0, 0)','rgb(152, 133, 88)','rgb(194, 178, 128)','rgb(193, 154, 107)','rgb(229, 170, 112)','rgb(154, 42, 42)','rgb(150, 105, 25)','rgb(240, 230, 140)','rgb(196, 164, 132)','rgb(192, 64, 0)','rgb(128, 0, 0)','rgb(150, 121, 105)','rgb(242, 210, 189)','rgb(204, 119, 34)','rgb(128, 128, 0)','rgb(74, 4, 4)','rgb(169, 92, 104)','rgb(165, 42, 42)','rgb(145, 56, 49)','rgb(128, 70, 27)','rgb(139, 69, 19)','rgb(194, 178, 128)','rgb(160, 82, 45)','rgb(210, 180, 140)','rgb(72, 60, 50)','rgb(124, 48, 48)','rgb(245, 222, 179)','rgb(114, 47, 55)'],
+      'blacks' => ['rgb(0, 0, 0)','rgb(54, 69, 79)','rgb(2, 48, 32)','rgb(48, 25, 52)','rgb(52, 52, 52)','rgb(27, 18, 18)','rgb(40, 40, 43)','rgb(25, 25, 112)','rgb(53, 57, 53)']
+    }
+
+
+
+
+############################################  PIE/ SIMPLE BAR BAR ######################################
+  if chart_type.match(/^pie|bar$/) then
+
+    #hash for storing colors indexed with chart_field[0] values used to assign color to detail records
+    detail_color = Hash.new()
+    i = 0 #used to assign above to colorway values
+
+#chart_fields[0]
+#    sort_fields = Array.new()
+#    sort_fields[0] = 'completed'
+#    subset_ids = $collection.sort(subset_ids, sort_fields)
+
+
+    #loop through the ids supplied by the report function
+    subset_ids.each do | key |
+
+      #find a color for the detail row
+      if !detail_color.has_key?($collection.items[key].instance_eval(chart_fields[0])) then
+        detail_color[$collection.items[key].instance_eval(chart_fields[0])] = colorway[i]
+        i = i+1
+        if i > colorway.length then i = 0 end
+      end
+
+      #are we counting records or summing quantity? if records, default to 1 for each record; if quantity, some quantity field of record
+      qty = 1
+      if chart_qty != '' and chart_qty != nil then
+        qty = $collection.items[key].quantity ? $collection.items[key].quantity : 1
+      end
+
+      #find items which match the value of the first (and only for pie/bar chart) column
+      primary_field[$collection.items[key].instance_eval(chart_fields[0]).to_s] = primary_field[$collection.items[key].instance_eval(chart_fields[0]).to_s].to_i + qty.to_i
+
+      total_count += qty.to_i
+      #populate a row for the detail table displayed beneath the chart
+      details << %Q~<tr><td>#{link_id($collection.items[key].id)}</td><td>#{qty}</td><td>#{$collection.items[key].title}</td>
+          <td><span class='textshadow' style="color:#{detail_color[$collection.items[key].instance_eval(chart_fields[0])]};">
+            #{$collection.items[key].instance_eval(chart_fields[0])}
+          </span></td></tr>~
+
+    end #each subset_id
+
+    #assign values to the plotly value and label data variables
+    labels = Array.new()
+    values = Array.new()
+
+    #assign chart_field names and values to plotly vars for labels and values
+    primary_field.each do | key, value |
+        labels << "#{key}"
+        values << "#{value}"
+    end #of primary_field processing
+
+    #map null values to something more sensible for the user
+    labels.map!{ | m | if m.match(/^$/) then '??' else m end }
+    values.map!{ | m | if m.match(/^$/) then '0' else m end }
+
+    #slightly different plotly javascript data between pie and simple bar charts
+    if chart_type == 'pie' then
+      data << %Q~
+      var xValues = ['#{labels.join("','")}'];
+      var yValues = [#{values.join(",")}];
+      var data = [{
+          labels: xValues,
+          values: yValues,
+          type: '#{chart_type}',
+          rotation: -30
+          }];\n~
+    elsif chart_type == 'bar' then
+      data << %Q~
+      var xValues = ['#{labels.join("','")}'];
+      var yValues = [#{values.join(",")}];
+      var data = [{
+              x: xValues,
+              y: yValues,
+              marker: {color: ["#{detail_color.values.join('","')}"]},
+              type: '#{chart_type}',
+              text: yValues.map(String),
+              textposition: 'auto'
+            }];\n~
+    end #chart_type pie or bar plotly data
+
+    #layout section of plotly data
+    layout = %Q~var layout = {colorway : #{colorway},
+            title: '#{chart_fields[0]}',
+            paper_bgcolor: 'rgb(0,0,0,0)',
+            plot_bgcolor: 'rgb(0,0,0,0)',
+            legend: {bgcolor: 'rgba(0,0,0,0)', title:{ text:'#{chart_fields[0].to_s}'}},
+            autosize: true,
+            yaxis: {
+                automargin: true
+              }
+          };~
+
+    #header row for the detail listing of records
+    detail_header_row = %Q~<tr><th>ID</th><th>#{count_of}<br />#{total_count}</th><th>Name</th><th>#{chart_fields[0]}</th></tr>~
+
+
+
+
+#puts "###########################################  STACKED/GROUPED BAR ######################################"
+  elsif chart_type.match(/^bar-grouped|bar-stacked$/) then
+
+    detail_color = Hash.new()
+    i = 0
+
+    #what type of bar chart are we making?
+    case chart_type
+    when "bar-grouped"
+        barmode = "group"
+    when "bar-stacked"
+        barmode = "stack"
+    end
+
+    #primary field used for x axis (horizontal), secondary_field becomes the y axis (vertical)
+    values = Hash.new()
+
+    #count the number of records with charted attribute
+    subset_ids.each do | key |
+
+      #are we counting records or summing the quantity?
+      qty = 1
+      if chart_qty != '' and chart_qty != nil then
+        qty = $collection.items[key].quantity ? $collection.items[key].quantity : 1
+      end
+
+      primary_field[$collection.items[key].instance_eval(chart_fields[0]).to_s] = primary_field[$collection.items[key].instance_eval(chart_fields[0]).to_s].to_i + qty.to_i
+      secondary_field[$collection.items[key].instance_eval(chart_fields[1].to_s)] = secondary_field[$collection.items[key].instance_eval(chart_fields[1].to_s)].to_i + qty.to_i
+
+      if chart_fields[1].to_s == $collection.items[key].instance_eval(chart_fields[1]).to_s then
+          secondary_field[chart_fields[1].to_s] = secondary_field[chart_fields[1].to_s].to_i + qty.to_i
+      end
+
+      #increase the total count for the detail report
+      total_count += qty.to_i
+
+      #find a color for the detail row
+      if !detail_color.has_key?($collection.items[key].instance_eval(chart_fields[1])) then
+        detail_color[$collection.items[key].instance_eval(chart_fields[1])] = colorway[i]
+        i = i+1
+        if i > colorway.length then i = 0 end
+      end
+
+      #add the row to the detail report
+      details << %Q~<tr><td>#{link_id($collection.items[key].id)}</td><td>#{qty}</td><td>#{$collection.items[key].title}</td><td>#{$collection.items[key].instance_eval(chart_fields[0])}</td>
+      <td>
+        <span class='textshadow' style="color:#{detail_color[$collection.items[key].instance_eval(chart_fields[1])]};">
+          #{$collection.items[key].instance_eval(chart_fields[1])}
+        </span>
+      </td></tr>~
+    end #of subset id
+
+    labels = String.new()
+    traces = String.new()
+    secondary_values = Hash.new()
+
+    secondary_field.each do | key, value |
+
+      value_string = values[key]
+      value_string = "#{value_string} '#{value.to_s}',"
+
+      secondary_values[key] = Hash.new()
+
+      values[key] = value_string
+
+    end #of secondary_field keys
+
+    subset_ids.each do | key |
+
+      #are we counting records or summing the quantity? AGAIN!
+      qty = 1
+      if chart_qty != '' and chart_qty != nil then
+        qty = $collection.items[key].quantity ? $collection.items[key].quantity : 1
+      end
+
+      primary_field_name = $collection.items[key].instance_eval(chart_fields[0]).to_s
+      secondary_field_name = $collection.items[key].instance_eval(chart_fields[1]).to_s
+      secondary_values[secondary_field_name][primary_field_name] = secondary_values[secondary_field_name][primary_field_name].to_i + qty.to_i
+
+    end #subset_ids.each
+
+    i = 0
+    xvalues = Array.new(primary_field.keys)
+    yvalues = Array.new(xvalues.length, '0')
+
+    secondary_values.each do | key, value |
+
+      s = 0
+      xvalues.each do | p |
+        yvalues[s] = !secondary_values[key][p] ? '0' : secondary_values[key][p]
+        s = s+1
+      end
+
+      #substitue ?? for null values in xvalues and name
+      xvalues.map!{ | m | if m.match(/^$/) then '??' else m end }
+      if key == '' || key == nil then key = '??' end
+
+      traces << %Q~\nvar xValues = ['#{xvalues.join("','")}'];
+                 \nvar yValues = [#{yvalues.join(",")}];
+                 \nvar trace#{i} = {x: xValues,
+                                    y: yValues,
+                                    name: '#{key}',
+                                    type: 'bar',
+                                    text: yValues.map(String),
+                                    textposition: 'auto'
+                                   };
+                 ~
+      #reset null values to null to match next record with null values in secondary fields
+      # (must be a better way to do this!)
+      xvalues.map!{ | m | if m.match(/\?\?/) then '' else m end }
+
+      data << "trace#{i},"
+      i = i + 1
+    end #of secondary_field each
+
+    data = "var data = [#{data}]"
+
+    layout = %Q~var layout = {colorway: #{colorway},
+              title: '#{chart_fields.join(", ")}',
+              paper_bgcolor: 'rgb(0,0,0,0)',
+              plot_bgcolor: 'rgb(0,0,0,0)',
+              showlegend: true,
+              legend: {bgcolor: 'rgba(0,0,0,0)', title:{ text:'#{chart_fields[1].to_s}'}},
+              xaxis: {title: '#{chart_fields[0].to_s}'},
+              barmode: '#{barmode}',
+              autosize: true,
+              automargin: true
+
+              };~
+
+    detail_header_row = %Q~<tr><th>ID</th><th>#{count_of}<br />#{total_count}</th><th>Name</th><th>#{chart_fields[0]}</th><th>#{chart_fields[1]}</th></tr>~
+
+
+
+#puts "###########################################  TIMELINE ######################################"
+  elsif chart_type.match(/^timeline$/) then
+
+    reads = Array.new()
+    read_dates = Array.new()
+    read_hash = Hash.new()
+
+    acquisitions = Array.new()
+    acquisition_dates = Array.new()
+    acquisition_hash = Hash.new()
+
+    acq_count = 0
+    read_count = 0
+
+    #random color for each genre keyed to genre
+    color_hash = Hash.new()
+
+    subset_ids.each do | key|
+      #create a hash of hashes; first key is genre
+      read_hash[$collection.items[key].genre] = Hash.new()
+      acquisition_hash[$collection.items[key].genre] = Hash.new()
+
+      #making sure genres in both completed and acquired use the same color
+      color_hash[$collection.items[key].genre] = (colors['reds'] + colors['yellows'] + colors['blues']).sample
+#      color_hash[$collection.items[key].genre] = colors.flatten.sample
+  end
+
+
+    subset_ids.each do | key |
+      #flag to indicate whether to add the record to the detail lising
+      add_to_detail = ''
+      qty = 1 #default to 1... mostly to account for acquisitions that do not have a quantity listed
+      if $collection.items[key].quantity.to_i > 0 then qty = $collection.items[key].quantity.to_i end
+
+      if $collection.items[key].acquired == '' then $collection.items[key].acquired = '2018-01-01' end
+
+      #populate the acquisition hash of hashes keyed by date of read/acquisition
+      if $collection.items[key].acquired != '' then
+        #increment the hash[genre][acquistion-date] count/quantity
+        acquisition_hash[$collection.items[key].genre][$collection.items[key].acquired] = acquisition_hash[$collection.items[key].genre][$collection.items[key].acquired].to_i + qty
+        add_to_detail = 'Y'
+        acq_count = acq_count + qty
+      end
+      #populate the read hash of hashes keyed by date of completion/acquistion
+      if $collection.items[key].date_read != '' then
+        #increment the hash[genre][date_read] count/quantity
+        read_hash[$collection.items[key].genre][$collection.items[key].date_read] = read_hash[$collection.items[key].genre][$collection.items[key].date_read].to_i + qty
+        add_to_detail = 'Y'
+        read_count = read_count + qty
+      end
+
+      #if we added the record to the aquisition/read plots we want to add it to the detail listing
+      if add_to_detail == 'Y' then details << %Q~<tr><td>#{link_id($collection.items[key].id)}</td><td>#{$collection.items[key].quantity}</td><td>#{$collection.items[key].genre}</td><td><span class='textshadow' style="color:#{color_hash[$collection.items[key].tags]};">#{$collection.items[key].genre}</span></td><td>#{$collection.items[key].title}</td><td>#{$collection.items[key].acquired}</td><td>#{$collection.items[key].date_read}</td></tr>~ end
+
+    end #subset_ids.each
+
+    trace_list = Array.new()
+    traces = String.new()
+    i = 0
+
+    #create the read traces for plotly
+    read_hash.each do |genre, rd_hash|
+      all_dates = Array.new()
+      all_qty = Array.new()
+      var_name = "trace#{i}"
+      i=i+1
+
+      rd_hash.each do | date, quantity|
+        all_dates << date
+        all_qty << quantity
+      end #end read_hash date
+
+      if all_qty.length != 0 then
+        trace_list << var_name
+        traces << %Q~var #{var_name} = {
+          type: "scatter",
+          mode: "markers",
+          name: '#{genre} (C)',
+          x: ['#{all_dates.join("','")}'],
+          y: [#{all_qty.join(',')}],
+          legendgroup: '#{genre}',
+          marker: {
+            color: '#{color_hash[genre]}',
+            size: 10,
+            line: {color: 'grey',
+            width: 1}
+          }
+          };~
+      end #end if all_qty
+    end #end complete_hash genre
+
+    #create the acquisition traces for plotly
+    acquisition_hash.each do |genre, acq_hash|
+      all_dates = Array.new()
+      all_qty = Array.new()
+      var_name = "trace#{i}"
+      i=i+1
+
+      acq_hash.each do | date, quantity|
+        all_dates << date
+        all_qty << quantity
+      end
+
+      if all_qty.length != 0 then
+        trace_list << var_name
+        traces << %Q~var #{var_name} = {
+          type: "scatter",
+          mode: "markers",
+          name: '#{genre} (A)',
+          x: ['#{all_dates.join("','")}'],
+          y: [#{all_qty.join(',')}],
+          legendgroup: '#{genre}',
+          marker: {
+            color: '#{color_hash[genre]}',
+            size: 10,
+            symbol: "cross",
+            line: {color: 'grey',
+            width: 1}
+          }
+        };~
+      end
+    end #end acquistion_hash genre
+
+    #trace list for plotly data variable
+    data = "var data = [#{trace_list.join(",")}];"
+
+    #layout var for plotly
+    layout = %Q~var layout = {colorway: #{colorway},
+              title: 'Timeline',
+              paper_bgcolor: 'rgb(0,0,0,0)',
+              plot_bgcolor: 'rgb(0,0,0,0)',
+              showlegend: true,
+              legend: {bgcolor: 'rgba(0,0,0,0)', title:{ text:'Action'}},
+              autosize: true,
+              automargin: true
+              };~
+
+    #detail report header row for timeline is slightly different than other chart types
+    detail_header_row = %Q~<tr><th>ID</th><th>Quantity</th><th>Genre</th><th>Tags</th><th>Title</th><th>Acquired<br />(#{acq_count})</th><th>Read<br />(#{read_count})</th></tr>~
+
+  end #of timeline chart type
+
+#pass whatever chart has been created to html_output
+  return html_output(chart_type, detail_header_row, details, traces, data, layout)
+end #display
+
+
+#########################################################################################
+# HTML_OUTPUT
+#HTML code page that displays plotly charts
+def self.html_output (chart_type, detail_header_row, details, traces, data, layout)
+    #return a page showing the updated fields and values
+    chart = %Q~<!DOCTYPE html><html lang="en"><head>
+	<script src='../plotly/plotly-2.20.0.min.js'></script>
+  <link rel="stylesheet" type="text/css" href="../application_styles/application.css" />
+  <link rel="stylesheet" type="text/css" href="../application_styles/report.css" />
+  <style>
+    .textshadow {text-shadow: -1px 1px 1px #bbb, 1px 2px 1px #bbb,  1px -1px 0 #bbb,  -1px -1px 0 #bbb; }
+  </style>
+  <title>#{$APPLICATION_NAME} #{chart_type.capitalize} Chart</title>
+  </head>
+  <body><h2>#{chart_type.capitalize} Chart <span style="width:100%;color:#8A8370;font-size:9pt;"> (close browser tab when finshed to return to Query)</span></h2>
+	 <div id='Chart' style='width:95%;height:auto;'><!-- Plotly chart will be drawn inside this DIV --></div>
+   <div><table id='report'>#{detail_header_row} #{details}</table></div>
+  </body>
+  <script>
+    #{traces}
+    #{data}
+    #{layout}
+
+    var config = {responsive: true};
+
+    Plotly.newPlot('Chart', data, layout, config);
+  </script>
+  </html>~
+
+  return chart
+end #html_output
+
+end #Class Chart
+
+
 
 
 
@@ -2476,7 +3057,7 @@ attr_accessor :items, :select, :sort
     #update the added field to the current date
     item.added = Time.now.to_s
 
-puts ">>>>> ITEM ID: #{item.id} <<<<<<"
+#puts ">>>>> ITEM ID: #{item.id} <<<<<<"
 
 
     #add or update the item in the collection@items
@@ -2618,15 +3199,19 @@ class Item < Hash
                  :cost,       :value,              :location,          :acquired,           :added,
                  :notes,      :web,                :icon_image,        :item_image,         :image_dir,
                  #application specific
+                 :quantity,
                  :title,      :isbn,               :authors,           :pages,              :format,
-                 :edition,    :publisher,          :publication_date,  :language,           :disposition
+                 :edition,    :publisher,          :publication_date,  :language,           :disposition,
+                 :date_read
 
   def initialize(id=nil,      description='',      genre='',                 tags='',       #:name='',
                  cost=0.00,   value=0.00,          location='at large',      acquired='',   added='',
                  notes='',    web='',              icon_image='default.png', item_image='', image_dir='application_images',
                  #application specific
+                 quantity='1',
                  title='',    isbn='0000000000',   authors='unknown',   pages='',           format='paperback',
-                 edition='',  publisher='',        publication_date='', language='English', disposition=''
+                 edition='',  publisher='',        publication_date='', language='English', disposition='',
+                 date_read=''
                 )
 
        #autofill the instance variables with method added to Object class, below
@@ -2659,7 +3244,7 @@ end #class
 
  #This takes the name of the file, cleans it up, and uses it as the application name throughout the script
  $APPLICATION_NAME = File.basename($0, File.extname($0)).downcase.split(/ |\_|\-/).map(&:capitalize).join(" ")
- $VERSION = 'v.20220104'
+ $VERSION = 'v.20230610'
 
  #Navigational menus
  $MENUS     = ['location','genre','tags','format']
@@ -2675,16 +3260,18 @@ end #class
 #    puts "creating reports"
  end
 
+ #using https would be good but it is dependent upon the user's environment with SSL and complicates install
+  $SERVER = 'http://localhost'
+  $PORT = 8500
 
-if $0 == __FILE__ then
+ if $0 == __FILE__ then
 
   #mount servlets for various pages/commands
-  server = WEBrick::HTTPServer.new(:Port => 8000,
+  server = WEBrick::HTTPServer.new(:Port => $PORT,
                                    :DocumentRoot => Dir::pwd,
                                    :SSLEnable => true,
                                    :SSLCertName => $APPLICATION_NAME
                                  )
-
 
   server.mount "/items", ShowItems
   server.mount "/manage_item", ManageItems
@@ -2696,9 +3283,10 @@ if $0 == __FILE__ then
   server.mount "/quit", Quit
   server.mount "/peek", PeekItem
   server.mount "/bulk_update", BulkUpdate
+  server.mount "/chart", Chart
 
   #open the default browser and load items page
-  link = "http://localhost:8000/items"
+  link = "#{$SERVER}:#{$PORT}/items"
   if RbConfig::CONFIG['host_os'] =~ /mswin|mingw|cygwin/ then
     system("start #{link}")
   elsif RbConfig::CONFIG['host_os'] =~ /darwin/ then
@@ -2713,5 +3301,4 @@ if $0 == __FILE__ then
   #start the web server
   server.start
 
-end
-#end #why? it gives a 'missing end' error if not here.
+end #if $0 == __FILE__
