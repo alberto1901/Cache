@@ -94,7 +94,7 @@ class Report < Hash
 
 attr_accessor :report_name,
   :id_order,            :id_filter,            :id_exact,               :id_sort,
-  :title_order,          :title_filter,        :title_exact,             :title_sort,
+  :name_order,          :name_filter,        :name_exact,             :name_sort,
   :description_order,   :description_filter,   :description_exact,      :description_sort,
   :location_order,      :location_filter,      :location_exact,         :location_sort,
   :genre_order,         :genre_filter,         :genre_exact,            :genre_sort,
@@ -110,7 +110,7 @@ attr_accessor :report_name,
   :notes_order,         :notes_filter,         :notes_exact,            :notes_sort,
   :quantity_order,      :quantity_filter,      :quantity_exact,         :quantity_sort,
 
-  :date_read_order,     :date_read_filter,     :date_read_exact,        :date_read_sort,
+  :completed_order,     :completed_filter,     :completed_exact,        :completed_sort,
   :isbn_order,              :isbn_filter,                :isbn_exact,               :isbn_sort,
   :authors_order,           :authors_filter,             :authors_exact,            :authors_sort,
   :pages_order,             :pages_filter,               :pages_exact,              :pages_sort,
@@ -127,7 +127,7 @@ attr_accessor :report_name,
   def initialize(
     report_name = nil,
     id_order = nil,            id_filter = nil,            id_exact = nil,               id_sort = nil,
-    title_order = nil,         title_filter = nil,         title_exact = nil,            title_sort = nil,
+    name_order = nil,          name_filter = nil,          name_exact = nil,             name_sort = nil,
     description_order = nil,   description_filter = nil,   description_exact = nil,      description_sort = nil,
     location_order = nil,      location_filter = nil,      location_exact = nil,         location_sort = nil,
     genre_order = nil,         genre_filter = nil,         genre_exact = nil,            genre_sort = nil,
@@ -143,7 +143,7 @@ attr_accessor :report_name,
     notes_order = nil,         notes_filter = nil,         notes_exact = nil,            notes_sort = nil,
     quantity_order = nil,      quantity_filter = nil,      quantity_exact = nil,         quantity_sort = nil,
 
-    date_read_order = nil,       date_read_filter = nil,         date_read_exact = nil,        date_read_sort = nil,
+    completed_order = nil,       completed_filter = nil,         completed_exact = nil,        completed_sort = nil,
     isbn_order=nil,              isbn_filter=nil,                isbn_exact=nil,               isbn_sort=nil,
     authors_order=nil,           authors_filter=nil,             authors_exact=nil,            authors_sort=nil,
     pages_order=nil,             pages_filter=nil,               pages_exact=nil,              pages_sort=nil,
@@ -221,9 +221,7 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
 
     #check and save the query parameters for later recall if a query name has been provided
     if request.query['query_name'] &&              #save/update report if named
-       request.query['query_name'].to_s != '' &&   #unless report named ''
-       request.query['chart'].to_s != 'on' &&      #unless creating charts
-       request.query['bulk_update'].to_s != 'on'   #unless doing bulk updates
+       request.query['query_name'].to_s != ''      #unless report named ''
       save_report(request.query)
     end #if query name
 
@@ -236,27 +234,29 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
     summary_field_name = ''
 
     #Save the report options for use later in formatting the query Results
+    report_type = request.query['report_type']
+
+    if report_type == 'standard' then
+      report_format = ''
+      exclude_summary = request.query['exclude_summary']
+    elsif report_type == 'labels' then
+      report_format = report_type
+      #exclude_summary = ''
+    elsif report_type == 'tab_delimited' then
+      exclude_html_format = report_type
+      exclude_summary = 'ON'
+    elsif report_type == 'bulk_update' then
+      bulk_update = report_type
+      exclude_summary = request.query['exclude_summary']
+    elsif report_type.match(/pie|bar|bar-stacked|bar-grouped|timeline/) then
+      chart = 'ON'
+      chart_qty = 'ON'
+      exclude_summary = 'ON'
+    end
+
     #Delete the options from the actual item query since items don't have corresponding fields
-    report_format = request.query['report_format']
-    request.query.delete('report_format')
-
-    exclude_html_format = request.query['exclude_html_format']
-    request.query.delete('exclude_html_format')
-
-    exclude_summary = request.query['exclude_summary']
+    request.query.delete('report_type')
     request.query.delete('exclude_summary')
-
-    bulk_update = request.query['bulk_update']
-    request.query.delete('bulk_update')
-
-    chart = request.query['chart']
-    request.query.delete('chart')
-
-    chart_type = request.query['chart_type']
-    request.query.delete('chart_type')
-
-    chart_qty = request.query['chart_qty']
-    request.query.delete('chart_qty')
 
     select_by = Array.new() #to pass to report for summary
 
@@ -366,14 +366,14 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
     if chart then
 
       #sort the ids so the detail listing matches chart
-      if chart_type != 'timeline' then
+      if report_type != 'timeline' then
         subset_ids = $collection.sort(subset, sort_fields)
       else
-        subset_ids = $collection.sort(subset, ['acquired','date_read'])
+        subset_ids = $collection.sort(subset, ['acquired','completed'])
         subset_ids.reverse!
       end
       #call and return the chart
-      return 200, "text/html", Chart.display(subset_ids, query, chart_type, chart_qty)
+      return 200, "text/html", Chart.display(subset_ids, query, report_type, chart_qty)
     end #if bulk_update
     #END BULK UPDATES
     ##############################################################################
@@ -481,7 +481,7 @@ report.each do |row|
 
     if exclude_summary == nil then
       report_row_formatted << field_summary(summary_count, summary_field_name, current_summary_value, summary_replacement_cost, summary_replacement_value, summary_quantity, summary_genre, report_format)
-      report_row_formatted << %Q~<tr>#{bulk_update_header}<th>#{header_row.join('</th><th>')}</th></tr>\n~
+      report_row_formatted << %Q~<tr>#{bulk_update_header}<th>#{header_row.join('</th><th>')}</th></tr>~
     end
 
     #update the report totals
@@ -577,10 +577,14 @@ end #each row
 #return a text only report if requested so... remove html code
 if exclude_html_format then
     report_row_formatted.gsub! /[\n|\r]/, ", "
+    report_row_formatted.gsub! '<thead[^>]*>',''
+    report_row_formatted.gsub! '</thead>',''
+    report_row_formatted.gsub! '<tfoot[^>]*>',''
+    report_row_formatted.gsub! '</tfoot>',''
     report_row_formatted.gsub! '</tr>,',"\n"
-    report_row_formatted.gsub! '<tr>',''
+    report_row_formatted.gsub! '<tr[^>]*>',''
     report_row_formatted.gsub! '</td><td>',"\t"
-    report_row_formatted.gsub! '<td>',''
+    report_row_formatted.gsub! '<td[^>]*>',''
     report_row_formatted.gsub! '</td>',''
     report_row_formatted.gsub! '</a>',''
     report_row_formatted.gsub! /<a href[^>]*>/, ''
@@ -602,6 +606,9 @@ end #if bulk_update
   report_html << %Q~<!DOCTYPE html><html lang="en">
   <head><title>#{$APPLICATION_NAME} Report - #{report_name}</title>
     <link rel="stylesheet" type="text/css" href="../application_styles/report.css" />
+    <link rel="stylesheet" type="text/css" href="../sortable_table/sortable-table.css" />
+    <link rel="stylesheet" href="../sortable/sortable-theme-minimal.css" />
+    <script src='../sortable/sortable.js'></script>
   </head><body>
    <div style="width:100%;">
    <h1 style="width:100%;text-align:center;">#{report_name}</h1>
@@ -620,9 +627,9 @@ end #if bulk_update
 
   </div>
    <div>
-   <table id='report'>
-   <tr><th>#{header_row.join('</th><th>')}</th></tr>
-    #{report_row_formatted}
+  <table class="sortable-theme-minimal" data-sortable id='report'>
+   <thead><tr><th>#{header_row.join('</th><th>')}</th></tr></thead>
+   <tbody>#{report_row_formatted}</tbody>
     </table>
     </div>
     </body></html> ~
@@ -643,8 +650,8 @@ end #format_results
     genres.flatten!
     genres.uniq!
 
-    if report_format.to_s == '' then
-    summary_row = %Q~<tr style="background-color:#dddddd;font-size:14pt;padding:8px;font-decoration:bold;"><td colspan=#{colspan}> #{summary_count} items in #{summary_field} #{summary_field_value} | quantity: #{summary_quantity} | replacement cost: $ #{summary_cost} | sell value: $ #{summary_value}</td></tr>~
+  if report_format.to_s == '' then
+    summary_row = %Q~<tr style="background-color:#dddddd;font-size:14pt;padding:8px;font-decoration:bold;"><td colspan=#{colspan}> <span style="font-weight:bold;">SUMMARY: #{summary_field_value} #{summary_field}</span> #{summary_count} records | quantity: #{summary_quantity} | replacement cost: $ #{summary_cost} | sell value: $ #{summary_value}</td></tr>\n~
   else
     summary_row = %Q~</table>
     <div style="display:inline-block;white-space:nowrap;font-size:97pt;height:100%;width:20%;float:left;">
@@ -780,17 +787,26 @@ class Query < WEBrick::HTTPServlet::AbstractServlet
       end #instance_variables.each
 
 query_options_menu = %Q~<table style="width:100%;color:#8A8370;font-size:9pt;"><tr><th style="color:#8A8370;text-align:left;font-size:14pt;">query options</th></tr>
-            <tr><td><input type='checkbox' name='exclude_summary' id='exclude_summary' #{exclude_summary} /> exclude column one summary</td></tr>
-            <tr><td><input type='checkbox' name='exclude_html_format' id='exculde_html_format' #{exclude_html_format} /> exclude html format</td></tr>
+            <!-- tr><td><input type='checkbox' name='exclude_html_format' id='exclude_html_format' #{exclude_html_format} /> exclude html format</td></tr>
             <tr><td><input type='checkbox' name='report_format' id='report_format' #{report_format} /> label report format</td></tr>
             <tr><td><input type='checkbox' name='bulk_update' id='bulk_update' /> bulk update</td></tr>
-            <tr><td><input type='checkbox' name='chart' id='chart' /> chart
-                    <select name='chart_type' id='chart_type'><option value='pie'>pie</option><option value='bar'>bar</option><option value='bar-stacked'>bar-stacked</option><option value='bar-grouped'>bar-grouped</option><option value='timeline'>timeline</option></select>
-                    <input type='checkbox' name='chart_qty' id='chart_qty' /> sum quantity<br />&nbsp;&nbsp;&nbsp;&nbsp;(default is to count records)
+            -->
+            <tr><td><select name='report_type' id='report_type'>
+                      <option value='standard'>standard</option>
+                      <option value='bulk_update'>bulk update</option>
+                      <option value='pie'>chart - pie</option>
+                      <option value='bar'>chart - bar</option>
+                      <option value='bar-stacked'>chart - bar-stacked</option>
+                      <option value='bar-grouped'>chart - bar-grouped</option>
+                      <option value='timeline'>chart - timeline</option>
+                      <option value='labels'>drawer labels</option>
+                      <option value='tab_delimited'>tab delimited</option>
+                    </select>
+                    <div><input type='checkbox' name='exclude_summary' id='exclude_summary' #{exclude_summary} /> exclude column one summary</div>
             </td></tr>
           </table>~
 
-    query_html = %Q^<h1 style='width=100%;text-align:center;'>Query</h1>
+    query_html = %Q^<h1 style='width=100%;text-align:center;font-size:18pt;font-weight:bold;'>Query</h1>
       <div style='width:100%;float:left;'>
       <form id='query' name='query' method='POST' target='_blank' action='/query_results'>
 
@@ -798,7 +814,7 @@ query_options_menu = %Q~<table style="width:100%;color:#8A8370;font-size:9pt;"><
 
         <div style='float:left;'>
         <span style='color:#8A8370;font-size:12pt;align:center;width:4em;'>order</span>
-        <span style='display:inline-block;width:7em;color:#8A8370;font-size:12pt;align:center;'>column name</span>
+        <span style='display:inline-block;width:7em;color:#8A8370;font-size:12pt;align:center;'>column</span>
         <span style='color:#8A8370;font-size:12pt;text-align:center;'>filter (use ~ for OR)</span>
         <ul id='sortlist'>
         #{selected_columns.join}
@@ -916,7 +932,7 @@ class PeekItem < WEBrick::HTTPServlet::AbstractServlet
     subset_ids.each do | key |
   #standard fields
   id           = $collection.items[key].id
-  title        = $collection.items[key].title
+  name         = $collection.items[key].name
   description  = $collection.items[key].description
   location     = $collection.items[key].location
   genre        = $collection.items[key].genre
@@ -942,7 +958,7 @@ class PeekItem < WEBrick::HTTPServlet::AbstractServlet
   language 	   = $collection.items[key].language
   pages 	     = $collection.items[key].pages
   publication_date = $collection.items[key].publication_date
-  date_read    = $collection.items[key].date_read
+  completed    = $collection.items[key].completed
 
  item_images = String.new()
  item_image.split(',').each do |image|
@@ -977,7 +993,7 @@ html << %Q~<html lang="en">
 </head><body>
 <div id="content" style="width:95%" >
 <div class="item">
-  <img class="icon" name='icon_picture' style="float:left;" id='icon_picture' src='../application_images/#{icon_image}' alt="icon picture" /><h1 class="name"> #{title}</h1>
+  <img class="icon" name='icon_picture' style="float:left;" id='icon_picture' src='../application_images/#{icon_image}' alt="icon picture" /><h1 class="name"> #{name}</h1>
   <div style="width:100%;"><span class='identifier'>description</span><br />#{description}</div>
   <br style="clear:both;" />
 
@@ -1000,7 +1016,7 @@ html << %Q~<html lang="en">
           <div class="label" style="width:25%;"><span class='identifier'>value</span><br />#{value}</div>
           <br style="clear:both;" />
           <div class="label" style="width:50%;"><span class='identifier'>acquired date</span><br />#{acquired}</div>
-          <div class="label" style="width:50%;"><span class='identifier'>date read</span><br />#{date_read}</div>
+          <div class="label" style="width:50%;"><span class='identifier'>date completed</span><br />#{completed}</div>
           <div class="label" style="width:50%;"><span class='identifier'>added date</span><br />#{added}</div>
           <br style="clear:both;" />
           <div class="label" style="width:50%;"><span class='identifier'>genre</span><br />#{genre}</div>
@@ -1084,9 +1100,9 @@ class ShowItems < WEBrick::HTTPServlet::AbstractServlet
       subset_ids = $collection.sort(subset, 'age')
        message << "10 most recently edited items."
     else
-      #order the subset alphabetically by title
-      subset_ids = $collection.sort(subset,['title'])
-      message <<  %Q~Items with #{request.query['filter_by']}  #{request.query['filter_scope'] == 'exact' ? 'exactly matching ' : 'containing '} '#{request.query['filter_for']}', sorted alphapetically by title.~
+      #order the subset alphabetically by name
+      subset_ids = $collection.sort(subset,['name'])
+      message <<  %Q~Items with #{request.query['filter_by']}  #{request.query['filter_scope'] == 'exact' ? 'exactly matching ' : 'containing '} '#{request.query['filter_for']}', sorted alphapetically by name.~
     end
 
 
@@ -1095,7 +1111,7 @@ class ShowItems < WEBrick::HTTPServlet::AbstractServlet
 
       #clean the data
       id               = $collection.items[key].id
-      title        = $collection.items[key].title
+      name        = $collection.items[key].name
       description      = $collection.items[key].description
 #      genre            = $collection.items[key].genre
       tags             = $collection.items[key].tags
@@ -1186,13 +1202,13 @@ class ShowItems < WEBrick::HTTPServlet::AbstractServlet
         found_count += 1
         items_html << %Q~<div class="item" id='#{id}' style="display:#{display_state}; clear:both;padding-top:2em;" >
                          <div style="float:left;text-align:center;overflow:hidden;">
-                            <a href='/peek?id=#{id}' style="font-size:8pt;color:gray;" title="peek at #{title} details" onclick="peek(this.href);return false">#{icon_image}</a>
+                            <a href='/peek?id=#{id}' style="font-size:8pt;color:gray;" name="peek at #{name} details" onclick="peek(this.href);return false">#{icon_image}</a>
                         </div>
                          <div style="float:left;width:80%;overflow:hidden;">
-                            <span class='name'>#{title}</span><br />
+                            <span class='name'>#{name}</span><br />
                              #{authors} | #{format} #{web_url}<br />
                             <span style='font-size:18pt;'>#{description}</span><br />
-                            <span class='identifier'><a href='/manage_item?id=#{id}' title="edit #{title}" onMouseOver="this.style.color='black'" onMouseOut="this.style.color='#91b8b8'" style="color:#91b8b8;">edit id:#{id}</a> | location: #{location} | updated: #{added}</span><br />
+                            <span class='identifier'><a href='/manage_item?id=#{id}' name="edit #{name}" onMouseOver="this.style.color='black'" onMouseOut="this.style.color='#91b8b8'" style="color:#91b8b8;">edit id:#{id}</a> | location: #{location} | updated: #{added}</span><br />
                             Related: ~
 
         #make comma delimited genres into unique links
@@ -1318,7 +1334,7 @@ class ManageItems < WEBrick::HTTPServlet::AbstractServlet
      subset_ids.each do | id |
        entry_form << item_form_template(
           $collection.items[id].id,
-          $collection.items[id].title.encode("UTF-16BE", :invalid=>:replace, :replace=>"?").encode("UTF-8"),
+          $collection.items[id].name.encode("UTF-16BE", :invalid=>:replace, :replace=>"?").encode("UTF-8"),
           $collection.items[id].description.encode("UTF-16BE", :invalid=>:replace, :replace=>"?").encode("UTF-8"),
           $collection.items[id].location,
           $collection.items[id].genre,
@@ -1333,7 +1349,7 @@ class ManageItems < WEBrick::HTTPServlet::AbstractServlet
           $collection.items[id].web,
           $collection.items[id].notes,
           $collection.items[id].quantity,
-          $collection.items[id].date_read,
+          $collection.items[id].completed,
           $collection.items[id].format,
           $collection.items[id].publisher,
           $collection.items[id].isbn,
@@ -1354,7 +1370,7 @@ class ManageItems < WEBrick::HTTPServlet::AbstractServlet
 
   def item_form_template(
         id="",
-        title="",
+        name="",
         description="",
         location="at large",
         genre="",
@@ -1369,7 +1385,7 @@ class ManageItems < WEBrick::HTTPServlet::AbstractServlet
         web="",
         notes="",
         quantity="",
-        date_read="",
+        completed="",
         format="paper back",
         publisher="",
         isbn="",
@@ -1444,18 +1460,18 @@ return html = %Q~<!DOCTYPE html>
 <body onload="showDivs(['button_genre','button_tags','button_core']);">
     <div id="content">
       <div id="items">
-      <h1 style="width:100%;text-align:center;">#{title != nil && title != '' ? 'Editing ' + title : 'Adding new item'}.</h1>
+      <h1 style="width:100%;text-align:center;">#{name != nil && name != '' ? 'Editing ' + name : 'Adding new item'}.</h1>
 
 
       <form method='POST' action='/save_item' enctype="multipart/form-data">
         <button  type="button" class="collapsible" id="button_save" style="color:#8a8370;background-color:#c9c9b7;padding:1px;">&#8227; save <input type='submit' value='save' style="width:75px;height:28px;font-weight:bold;font-size:18px;float:right;"/></button>
         <br style="clear:both;" />
-        <img class="icon" name='icon_picture' style="float:left;" id='icon_picture' src='../#{image_dir}/#{icon_image}' alt="icon picture" /><h1> #{title}</h1>
+        <img class="icon" name='icon_picture' style="float:left;" id='icon_picture' src='../#{image_dir}/#{icon_image}' alt="icon picture" /><h1> #{name}</h1>
         <br style="clear:both;" />
 
         <button type="button" class="collapsible" id="button_core" style="color:#8a8370;background-color:#c9c9b7;padding:1px;">&#8227; core attributes</button>
         <div id="core" class="attributes" >
-          <div class="item" style="padding-bottom:1px;float:left;">name*<br /><input name='title' id='title' type='text' size='50rem' value="#{title}" />
+          <div class="item" style="padding-bottom:1px;float:left;">name*<br /><input name='name' id='name' type='text' size='50rem' value="#{name}" />
             <input name='id' id='id' type='hidden' value='#{id}' /></div>
             <div class="item" style="float:left;text-align:center;">#{$APPLICATION_NAME} id<br />#{id}</div>
             <br style="clear:both;" />
@@ -1468,7 +1484,7 @@ return html = %Q~<!DOCTYPE html>
             <br style="clear:both;" />
             <div class="item" style="float:left;padding-bottom:2px;">location<br /><input name='location' id='location' size="11rem" type='text' value='#{location}' /></div>
             <div class="item" style="float:left;padding-bottom:2px;">quantity<br /><input name='quantity' id='quantity' size="11rem" type='number' value='#{quantity}' /></div>
-            <div class="item" style="float:left;padding-bottom:2px;">date read<br /><input name='date_read' id='date_read' size="11rem" type='date' value='#{date_read}' /></div>
+            <div class="item" style="float:left;padding-bottom:2px;">date completed<br /><input name='completed' id='completed' size="11rem" type='date' value='#{completed}' /></div>
         </div> <!-- end core div -->
 
         <button type="button" class="collapsible" id="button_publishing_information" style="color:#8a8370;background-color:#c9c9b7;padding:1px;">&#8227; publishing information</button>
@@ -2097,7 +2113,7 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
     #save query values in variables for processing
 
     id           = request.query['id'].to_s.gsub(/\D/,'')
-    title        = request.query['title'].to_s.gsub(/[^\w\s\.\-\,\(\)\;\&\:\'\"\/]/,'')
+    name         = request.query['name'].to_s.gsub(/[^\w\s\.\-\,\(\)]/,'')
     description  = request.query['description'].to_s.gsub(/[^\w\s\.\-\,\(\)\;\&\:\'\"\/]/,'')
     location     = request.query['location'].to_s.gsub(/[^\w\s\.\-\,\(\)]/,'')
     genre        = request.query['genre'].to_s.gsub(/[^\w\s\.\-\,\(\)\&\/]/,'')
@@ -2113,7 +2129,7 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
     notes        = request.query['notes'].to_s.gsub(/[^\w\s\.\-\,\(\)\;\&\:\'\"]/,'')
     quantity     = request.query['quantity'].to_s.gsub(/\D/,'')
 
-    date_read    = request.query['date_read'].to_s.gsub(/[^\w\s\.\-,()]/,'')
+    completed    = request.query['completed'].to_s.gsub(/[^\w\s\.\-,()]/,'')
     format       = request.query['format'].to_s.gsub(/[^\w\s\.\-\,\(\)]/,'')
     publisher    = request.query['publisher'].to_s.gsub(/[^\w\s\.\-\,\(\)]/,'')
     publication_date = request.query['publication_date'].to_s.gsub(/[^\w\s\.\-,()]/,'')
@@ -2129,7 +2145,7 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
 
     error_msg = String.new
 
-    #need to put in some error checking here: make title, ensure isbn is valid or null (which will result in a new rowid being used).
+    #need to put in some error checking here: make name, ensure isbn is valid or null (which will result in a new rowid being used).
 
     #... save the documents if there are any, could be rules or images
     rule_dir = "publications"
@@ -2188,11 +2204,11 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
   end #if item_image
 
     #let's do some clean up on the fields
-    title.strip!
-    title.gsub!(/\'\'+/, "'")
-    title.gsub!(/\s\s+/, ' ')
-    if !title then
-      title = 'UNTITLED'
+    name.strip!
+    name.gsub!(/\'\'+/, "'")
+    name.gsub!(/\s\s+/, ' ')
+    if !name then
+      name = 'UNTITLED'
     end
 
     price = price ||= 0.00 #price or zero (instead of null)
@@ -2228,7 +2244,7 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
 
   #populate the item instance variables with the validated web form values
   new_item.id,
-  new_item.title,
+  new_item.name,
   new_item.description,
   new_item.location,
   new_item.genre,
@@ -2249,12 +2265,12 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
   new_item.publisher,
   new_item.disposition,
   new_item.publication_date,
-  new_item.date_read,
+  new_item.completed,
   new_item.format,
   new_item.language,
   new_item.edition =
   id,
-  title,
+  name,
   description,
   location,
   genre,
@@ -2275,7 +2291,7 @@ class SaveItems < WEBrick::HTTPServlet::AbstractServlet
   publisher,
   disposition,
   publication_date,
-  date_read,
+  completed,
   format,
   language,
   edition
@@ -2346,7 +2362,7 @@ class BulkUpdate < WEBrick::HTTPServlet::AbstractServlet
     #update the fields with new values
     update_items.each do | id |
       update_fields.each do | field_name, value |
-          $body << %Q~<tr><td>#{id}</td><td>#{$collection.items[id].title}</td><td>#{field_name}</td><td>#{value}</td></tr>~
+          $body << %Q~<tr><td>#{id}</td><td>#{$collection.items[id].name}</td><td>#{field_name}</td><td>#{value}</td></tr>~
           $collection.items[id].instance_variable_set("@#{field_name}", value.to_s)
       end #field value
 
@@ -2385,7 +2401,7 @@ class BulkUpdate < WEBrick::HTTPServlet::AbstractServlet
 
       type = 'text'
       #give acquired and completed input boxes calendar widget
-      if var.match(/^@acquired$/) then
+      if var.match(/^@acquired|@completed$/) then
         type = 'date'
       end
       #give quantity and number_bases input boxes number type drop down
@@ -2497,7 +2513,7 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
   #########################################################################################
   # DISPLAY
   #Determines chart type and creates plotly Javascript
-  def self.display(subset_ids, query, chart_type, chart_qty)
+  def self.display(subset_ids, query, report_type, chart_qty)
 
     chart_fields = Array.new()
 
@@ -2511,7 +2527,7 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
     end
 
     #make sure the correct number of data fields have been submitted
-    case chart_type
+    case report_type
       when "pie", "bar"
         if chart_fields[0] == 0 or chart_fields[0] == nil then
           details = "<h3>Pie and Bar charts require a field in order 1. Please try again.</h3>"
@@ -2562,7 +2578,7 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
 
 
 ############################################  PIE/ SIMPLE BAR BAR ######################################
-  if chart_type.match(/^pie|bar$/) then
+  if report_type.match(/^pie|bar$/) then
 
     #hash for storing colors indexed with chart_field[0] values used to assign color to detail records
     detail_color = Hash.new()
@@ -2595,7 +2611,7 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
 
       total_count += qty.to_i
       #populate a row for the detail table displayed beneath the chart
-      details << %Q~<tr><td>#{link_id($collection.items[key].id)}</td><td>#{qty}</td><td>#{$collection.items[key].title}</td>
+      details << %Q~<tr><td>#{link_id($collection.items[key].id)}</td><td>#{qty}</td><td>#{$collection.items[key].name}</td>
           <td><span class='textshadow' style="color:#{detail_color[$collection.items[key].instance_eval(chart_fields[0])]};">
             #{$collection.items[key].instance_eval(chart_fields[0])}
           </span></td></tr>~
@@ -2617,17 +2633,17 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
     values.map!{ | m | if m.match(/^$/) then '0' else m end }
 
     #slightly different plotly javascript data between pie and simple bar charts
-    if chart_type == 'pie' then
+    if report_type == 'pie' then
       data << %Q~
       var xValues = ['#{labels.join("','")}'];
       var yValues = [#{values.join(",")}];
       var data = [{
           labels: xValues,
           values: yValues,
-          type: '#{chart_type}',
+          type: '#{report_type}',
           rotation: -30
           }];\n~
-    elsif chart_type == 'bar' then
+    elsif report_type == 'bar' then
       data << %Q~
       var xValues = ['#{labels.join("','")}'];
       var yValues = [#{values.join(",")}];
@@ -2635,11 +2651,11 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
               x: xValues,
               y: yValues,
               marker: {color: ["#{detail_color.values.join('","')}"]},
-              type: '#{chart_type}',
+              type: '#{report_type}',
               text: yValues.map(String),
               textposition: 'auto'
             }];\n~
-    end #chart_type pie or bar plotly data
+    end #report_type pie or bar plotly data
 
     #layout section of plotly data
     layout = %Q~var layout = {colorway : #{colorway},
@@ -2654,19 +2670,24 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
           };~
 
     #header row for the detail listing of records
-    detail_header_row = %Q~<tr><th>ID</th><th>#{count_of}<br />#{total_count}</th><th>Name</th><th>#{chart_fields[0]}</th></tr>~
+    detail_header_row = %Q~<tr>
+      <th>ID</th>
+      <th>#{count_of} #{total_count}</th>
+      <th>Name</th>
+      <th>#{chart_fields[0]}</th>
+    </tr>~
 
 
 
 
 #puts "###########################################  STACKED/GROUPED BAR ######################################"
-  elsif chart_type.match(/^bar-grouped|bar-stacked$/) then
+  elsif report_type.match(/^bar-grouped|bar-stacked$/) then
 
     detail_color = Hash.new()
     i = 0
 
     #what type of bar chart are we making?
-    case chart_type
+    case report_type
     when "bar-grouped"
         barmode = "group"
     when "bar-stacked"
@@ -2703,7 +2724,7 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
       end
 
       #add the row to the detail report
-      details << %Q~<tr><td>#{link_id($collection.items[key].id)}</td><td>#{qty}</td><td>#{$collection.items[key].title}</td><td>#{$collection.items[key].instance_eval(chart_fields[0])}</td>
+      details << %Q~<tr><td>#{link_id($collection.items[key].id)}</td><td>#{qty}</td><td>#{$collection.items[key].name}</td><td>#{$collection.items[key].instance_eval(chart_fields[0])}</td>
       <td>
         <span class='textshadow' style="color:#{detail_color[$collection.items[key].instance_eval(chart_fields[1])]};">
           #{$collection.items[key].instance_eval(chart_fields[1])}
@@ -2789,30 +2810,36 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
 
               };~
 
-    detail_header_row = %Q~<tr><th>ID</th><th>#{count_of}<br />#{total_count}</th><th>Name</th><th>#{chart_fields[0]}</th><th>#{chart_fields[1]}</th></tr>~
+    detail_header_row = %Q~<tr>
+      <th>ID</th>
+      <th>#{count_of} #{total_count}</th>
+      <th>Name</th>
+      <th>#{chart_fields[0]}</th>
+      <th>#{chart_fields[1]}</th>
+    </tr>~
 
 
 
 #puts "###########################################  TIMELINE ######################################"
-  elsif chart_type.match(/^timeline$/) then
+  elsif report_type.match(/^timeline$/) then
 
-    reads = Array.new()
-    read_dates = Array.new()
-    read_hash = Hash.new()
+    completions = Array.new()
+    completion_dates = Array.new()
+    complete_hash = Hash.new()
 
     acquisitions = Array.new()
     acquisition_dates = Array.new()
     acquisition_hash = Hash.new()
 
     acq_count = 0
-    read_count = 0
+    com_count = 0
 
     #random color for each genre keyed to genre
     color_hash = Hash.new()
 
     subset_ids.each do | key|
       #create a hash of hashes; first key is genre
-      read_hash[$collection.items[key].genre] = Hash.new()
+      complete_hash[$collection.items[key].genre] = Hash.new()
       acquisition_hash[$collection.items[key].genre] = Hash.new()
 
       #making sure genres in both completed and acquired use the same color
@@ -2829,23 +2856,31 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
 
       if $collection.items[key].acquired == '' then $collection.items[key].acquired = '2018-01-01' end
 
-      #populate the acquisition hash of hashes keyed by date of read/acquisition
-      if $collection.items[key].acquired != '' && $collection.items[key].acquired != nil then
+      #populate the acquisition hash of hashes keyed by date of completion/acquistion
+      if $collection.items[key].acquired != '' then
         #increment the hash[genre][acquistion-date] count/quantity
         acquisition_hash[$collection.items[key].genre][$collection.items[key].acquired] = acquisition_hash[$collection.items[key].genre][$collection.items[key].acquired].to_i + qty
         add_to_detail = 'Y'
         acq_count = acq_count + qty
       end
-      #populate the read hash of hashes keyed by date of completion/acquistion
-      if $collection.items[key].date_read != '' && $collection.items[key].date_read != nil then
-        #increment the hash[genre][date_read] count/quantity
-        read_hash[$collection.items[key].genre][$collection.items[key].date_read] = read_hash[$collection.items[key].genre][$collection.items[key].date_read].to_i + qty
+      #populate the completion hash of hashes keyed by date of completion/acquistion
+      if $collection.items[key].completed != '' then
+        #increment the hash[genre][completion-date] count/quantity
+        complete_hash[$collection.items[key].genre][$collection.items[key].completed] = complete_hash[$collection.items[key].genre][$collection.items[key].completed].to_i + qty
         add_to_detail = 'Y'
-        read_count = read_count + qty
+        com_count = com_count + qty
       end
 
-      #if we added the record to the aquisition/read plots we want to add it to the detail listing
-      if add_to_detail == 'Y' then details << %Q~<tr><td>#{link_id($collection.items[key].id)}</td><td>#{$collection.items[key].quantity}</td><td>#{$collection.items[key].genre}</td><td><span class='textshadow' style="color:#{color_hash[$collection.items[key].tags]};">#{$collection.items[key].genre}</span></td><td>#{$collection.items[key].title}</td><td>#{$collection.items[key].acquired}</td><td>#{$collection.items[key].date_read}</td></tr>~ end
+      #if we added the record to the aquisicion/completed plots we want to add it to the detail listing
+      if add_to_detail == 'Y' then details << %Q~<tr>
+          <td>#{link_id($collection.items[key].id)}</td>
+          <td>#{$collection.items[key].quantity}</td>
+          <td>#{$collection.items[key].genre}</td>
+          <td><span class='textshadow' style="color:#{color_hash[$collection.items[key].genre]};">#{$collection.items[key].genre}</span></td>
+          <td>#{$collection.items[key].name}</td>
+          <td>#{$collection.items[key].acquired}</td>
+          <td>#{$collection.items[key].completed}</td>
+        </tr>~ end
 
     end #subset_ids.each
 
@@ -2853,24 +2888,24 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
     traces = String.new()
     i = 0
 
-    #create the read traces for plotly
-    read_hash.each do |genre, rd_hash|
+    #create the completion traces for plotly
+    complete_hash.each do |genre, comp_hash|
       all_dates = Array.new()
       all_qty = Array.new()
       var_name = "trace#{i}"
       i=i+1
 
-      rd_hash.each do | date, quantity|
+      comp_hash.each do | date, quantity|
         all_dates << date
         all_qty << quantity
-      end #end read_hash date
+      end #end comp_hash date
 
       if all_qty.length != 0 then
         trace_list << var_name
         traces << %Q~var #{var_name} = {
           type: "scatter",
           mode: "markers",
-          name: '#{genre} (R)',
+          name: '#{genre} (C)',
           x: ['#{all_dates.join("','")}'],
           y: [#{all_qty.join(',')}],
           legendgroup: '#{genre}',
@@ -2931,32 +2966,47 @@ class Chart < WEBrick::HTTPServlet::AbstractServlet
               };~
 
     #detail report header row for timeline is slightly different than other chart types
-    detail_header_row = %Q~<tr><th>ID</th><th>Quantity</th><th>Genre</th><th>Tags</th><th>Title</th><th>Acquired<br />(#{acq_count})</th><th>Read<br />(#{read_count})</th></tr>~
+    detail_header_row = %Q~<tr>
+      <th>ID</th>
+      <th>Quantity</th>
+      <th>Category</th>
+      <th>Genre</th>
+      <th>Name</th>
+      <th>Acquired (#{acq_count})</th>
+      <th>Completed (#{com_count})</th>
+    </tr>~
 
   end #of timeline chart type
 
 #pass whatever chart has been created to html_output
-  return html_output(chart_type, detail_header_row, details, traces, data, layout)
+  return html_output(report_type, detail_header_row, details, traces, data, layout)
 end #display
 
 
 #########################################################################################
 # HTML_OUTPUT
 #HTML code page that displays plotly charts
-def self.html_output (chart_type, detail_header_row, details, traces, data, layout)
+def self.html_output (report_type, detail_header_row, details, traces, data, layout)
     #return a page showing the updated fields and values
     chart = %Q~<!DOCTYPE html><html lang="en"><head>
+    <link rel="stylesheet" type="text/css" href="../application_styles/application.css" />
+    <link rel="stylesheet" type="text/css" href="../application_styles/report.css" />
+    <link rel="stylesheet" href="../sortable/sortable-theme-minimal.css" />
 	<script src='../plotly/plotly-2.20.0.min.js'></script>
-  <link rel="stylesheet" type="text/css" href="../application_styles/application.css" />
-  <link rel="stylesheet" type="text/css" href="../application_styles/report.css" />
+  <script src='../sortable/sortable.js'></script>
   <style>
     .textshadow {text-shadow: -1px 1px 1px #bbb, 1px 2px 1px #bbb,  1px -1px 0 #bbb,  -1px -1px 0 #bbb; }
   </style>
-  <title>#{$APPLICATION_NAME} #{chart_type.capitalize} Chart</title>
+  <title>#{$APPLICATION_NAME} #{report_type.capitalize} Chart</title>
   </head>
-  <body><h2>#{chart_type.capitalize} Chart <span style="width:100%;color:#8A8370;font-size:9pt;"> (close browser tab when finshed to return to Query)</span></h2>
+  <body><h2>#{report_type.capitalize} Chart <span style="width:100%;color:#8A8370;font-size:9pt;"> (close browser tab when finshed to return to Query)</span></h2>
 	 <div id='Chart' style='width:95%;height:auto;'><!-- Plotly chart will be drawn inside this DIV --></div>
-   <div><table id='report'>#{detail_header_row} #{details}</table></div>
+   <div>
+      <table class="sortable-theme-minimal" data-sortable id='report'>
+        <thead>#{detail_header_row}</thead>
+        <tbody>#{details}</tbody>
+     </table>
+   </div>
   </body>
   <script>
     #{traces}
@@ -2967,6 +3017,7 @@ def self.html_output (chart_type, detail_header_row, details, traces, data, layo
 
     Plotly.newPlot('Chart', data, layout, config);
   </script>
+
   </html>~
 
   return chart
@@ -3200,18 +3251,18 @@ class Item < Hash
                  :notes,      :web,                :icon_image,        :item_image,         :image_dir,
                  #application specific
                  :quantity,
-                 :title,      :isbn,               :authors,           :pages,              :format,
+                 :name,      :isbn,               :authors,           :pages,              :format,
                  :edition,    :publisher,          :publication_date,  :language,           :disposition,
-                 :date_read
+                 :completed
 
   def initialize(id=nil,      description='',      genre='',                 tags='',       #:name='',
                  cost=0.00,   value=0.00,          location='at large',      acquired='',   added='',
                  notes='',    web='',              icon_image='default.png', item_image='', image_dir='application_images',
                  #application specific
                  quantity='1',
-                 title='',    isbn='0000000000',   authors='unknown',   pages='',           format='paperback',
+                 name='',    isbn='0000000000',   authors='unknown',   pages='',           format='paperback',
                  edition='',  publisher='',        publication_date='', language='English', disposition='',
-                 date_read=''
+                 completed=''
                 )
 
        #autofill the instance variables with method added to Object class, below
