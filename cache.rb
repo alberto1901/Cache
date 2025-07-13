@@ -121,7 +121,8 @@ attr_accessor :report_name,
   :language_order,          :language_filter,            :language_exact,           :language_sort,
   :edition_order,           :edition_filter,             :edition_exact,            :edition_sort,
 
-  :query_name,          :report_format,        :exclude_html_format,    :exclude_summary
+  :query_name,              :report_format,              :exclude_html_format,      :exclude_summary,
+  :save_query
 
 
   def initialize(
@@ -154,7 +155,8 @@ attr_accessor :report_name,
     language_order=nil,          language_filter=nil,            language_exact=nil,           language_sort=nil,
     edition_order=nil,           edition_filter=nil,             edition_exact=nil,            edition_sort=nil,
 
-    query_name = nil,          report_format = nil,        exclude_html_format = nil,    exclude_summary = nil)
+    query_name = nil,            report_format = nil,            exclude_html_format = nil,    exclude_summary = nil,
+    save_query = nil)
 
     #autofill the instance variables with method added to Object class, below
     set_instance_variables(binding, *local_variables)
@@ -219,9 +221,10 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
 
   def query_results(request)
 
-    #check and save the query parameters for later recall if a query name has been provided
+    #check and save the query parameters for later recall if a query name has been provided and save_query is checked
     if request.query['query_name'] &&              #save/update report if named
-       request.query['query_name'].to_s != ''      #unless report named ''
+       request.query['query_name'].to_s != '' &&   #unless report named ''
+       request.query['save_query']                 #and 'save query' checkbox is checked
       save_report(request.query)
     end #if query name
 
@@ -257,6 +260,7 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
     #Delete the options from the actual item query since items don't have corresponding fields
     request.query.delete('report_type')
     request.query.delete('exclude_summary')
+    request.query.delete('save_query')
 
     select_by = Array.new() #to pass to report for summary
 
@@ -384,7 +388,7 @@ class QueryResults < WEBrick::HTTPServlet::AbstractServlet
 end # query_results
 
 
-def format_results(subset_ids, query, sort_fields=nil, select_by=nil, report_format=nil, report_name=nil, exclude_summary=nil, exclude_html_format=nil, bulk_update=nil, chart=nil)
+def format_results(subset_ids, query, sort_fields=nil, select_by=nil, report_format=nil, report_name=nil, exclude_summary=nil, save_query=nil, exclude_html_format=nil, bulk_update=nil, chart=nil)
 
   #method variables
   report_html  = String.new
@@ -586,6 +590,7 @@ if exclude_html_format then
     report_row_formatted.gsub! '</td><td>',"\t"
     report_row_formatted.gsub! '<td[^>]*>',''
     report_row_formatted.gsub! '</td>',''
+    report_row_formatted.gsub! '<tr><td>',''
     report_row_formatted.gsub! '</a>',''
     report_row_formatted.gsub! /<a href[^>]*>/, ''
     report_row_formatted.gsub! /<img[^>]*>/, "\t"
@@ -768,7 +773,7 @@ class Query < WEBrick::HTTPServlet::AbstractServlet
       #if we dealing with a saved report, order the columns by the column order value
       if order && order.to_i > 0 then
         selected_columns[order.to_i] = %Q~<li id='column_#{value}'>
-              <span><input type='number' class='order_index'  id='#{value}_order'  name='#{value}_order'  value='#{order}' min='0' max='#{row.instance_variables.length}' style="width:3em;"/></span>
+              <span><input type='number' class='order_index'  id='#{value}_order'  name='#{value}_order'  value='#{order}' min='0' max='#{row.instance_variables.length}' style="width:2;resize:none;"/></span>
               <span style="display:inline-block;width:7em;">#{display}</span>
               <span><input type='text'     id='#{value}_filter' name='#{value}_filter' value='#{filter}' /> </span>
               <span><input type='checkbox' id='#{value}_exact'  name='#{value}_exact'  #{exact} /><span style='color:#8A8370;font-size:9pt;vertical-align:middle;'>exact </span></span>
@@ -776,7 +781,7 @@ class Query < WEBrick::HTTPServlet::AbstractServlet
               </li>~
       else #else append the column to the end of the list
       unselected_columns.push(%Q~<li id='column_#{order}'>
-            <span><input type='number' class='order_index'  id='#{value}_order'  name='#{value}_order'  value='#{order}' min='0' max='#{row.instance_variables.length}' style="width:3em;"/></span>
+            <span><input type='number' class='order_index'  id='#{value}_order'  name='#{value}_order'  value='#{order}' min='0' max='#{row.instance_variables.length}' style="size:2;resize:none;"/></span>
             <span style="display:inline-block;width:7em;">#{display}</span>
             <span><input type='text'     id='#{value}_filter' name='#{value}_filter' value='#{filter}' /> </span>
             <span><input type='checkbox' id='#{value}_exact'  name='#{value}_exact'  #{exact} /><span style='color:#8A8370;font-size:9pt;vertical-align:middle;'>exact </span></span>
@@ -810,7 +815,8 @@ query_options_menu = %Q~<table style="width:100%;color:#8A8370;font-size:9pt;"><
       <div style='width:100%;float:left;'>
       <form id='query' name='query' method='POST' target='_blank' action='/query_results'>
 
-        <div><h2>#{message}&nbsp;</h2><p>query name: <input type='text' name='query_name' id='query_name' value='#{query_name}'/> <input type='submit' value='generate report' /></div>
+        <div><h2>#{message}&nbsp;</h2><p>query name: <input type='text' name='query_name' id='query_name' value='#{query_name}'/> <input type='submit' value='run query' />
+          <span style='color:#8A8370;font-size:12pt;text-align:center;'><input type='checkbox' name='save_query' id='save_query' />save query parameters</span></div>
 
         <div style='float:left;'>
         <span style='color:#8A8370;font-size:12pt;align:center;width:4em;'>order</span>
@@ -2400,8 +2406,8 @@ class BulkUpdate < WEBrick::HTTPServlet::AbstractServlet
       next if var.match(/^@id|@added$/)
 
       type = 'text'
-      #give acquired and completed input boxes calendar widget
-      if var.match(/^@acquired|@completed$/) then
+      #give acquired and completed and disposition input boxes calendar widget
+      if var.match(/^@acquired|@completed|disposition$/) then
         type = 'date'
       end
       #give quantity and number_bases input boxes number type drop down
